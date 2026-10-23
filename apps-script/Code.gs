@@ -60,7 +60,7 @@ function getDashboard() {
     row.ApproverEmail === user.email && row.Decision === 'Pending'
   ).map(row => row.InvoiceID));
   return getInvoices_(db)
-    .filter(row => admin || row.SubmitterEmail === user.email || assigned.has(row.ID))
+    .filter(row => admin || row.Status === 'Filed' || row.SubmitterEmail === user.email || assigned.has(row.ID))
     .map(row => {
       const approval = approvals.find(item =>
         item.InvoiceID === row.ID && item.Decision === 'Pending' &&
@@ -84,6 +84,23 @@ function getDashboard() {
         approver2: row.Approver2,
       };
     });
+}
+
+function getInvoiceFile(id, kind) {
+  const user = requireUser_();
+  const db = getDb_();
+  const invoice = getInvoices_(db).find(row => row.ID === id);
+  if (!invoice) throw new Error('Invoice not found.');
+  const filed = invoice.Status === 'Filed' && invoice.FinalFileId;
+  const involved = isAdmin_(db, user.email) || invoice.SubmitterEmail === user.email ||
+    getApprovals_(db).some(row => row.InvoiceID === id && row.ApproverEmail === user.email);
+  if (!filed && !involved) throw new Error('You do not have access to this invoice.');
+  const useFinal = kind === 'final' && filed;
+  if (!useFinal && !involved) throw new Error('You do not have access to this invoice.');
+  const file = DriveApp.getFileById(useFinal ? invoice.FinalFileId : invoice.OriginalFileId);
+  const blob = file.getBlob();
+  if (blob.getBytes().length > 20000000) throw new Error('File is too large to preview. Open it from Drive.');
+  return { name: file.getName(), data: Utilities.base64Encode(blob.getBytes()) };
 }
 
 function getSetupInfo() {

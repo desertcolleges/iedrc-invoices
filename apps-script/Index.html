@@ -38,6 +38,9 @@
       #toast.fail { background: #a12b2b; }
       #toast[hidden] { display: none; }
       @media (max-width: 600px) { form { grid-template-columns: 1fr; } label.full { grid-column: auto; } }
+      #viewer { position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 9; padding: 16px; }
+      #viewer > div { background: #fff; height: 100%; display: flex; flex-direction: column; padding: 12px; border-radius: 8px; }
+      #viewer iframe { flex: 1; border: 0; margin-top: 8px; }
     </style>
   </head>
   <body>
@@ -104,6 +107,10 @@
       </div>
     </main>
     <div id="busy" hidden role="alert" aria-live="assertive"><div><div class="spinner"></div><strong id="busyText">Working…</strong><p class="muted">Please keep this page open.</p></div></div>
+    <div id="viewer" hidden><div>
+      <div class="actions"><strong id="viewerTitle"></strong><a id="viewerOpen" target="_blank" rel="noopener">Open in new tab</a><button id="viewerClose" class="secondary" type="button">Close</button></div>
+      <iframe id="viewerFrame" title="Invoice PDF"></iframe>
+    </div></div>
     <div id="toast" hidden role="status"></div>
     <script>
       const $ = selector => document.querySelector(selector);
@@ -159,6 +166,7 @@
         $('#pendingList').innerHTML = pending.length ? pending.map(invoice => `
           <article class="invoice">${summary(invoice)}
             <div class="actions">
+              <button class="secondary" data-action="view" data-kind="original" data-id="${escapeHtml(invoice.id)}">Review invoice</button>
               <input id="sig-${escapeHtml(invoice.id)}" aria-label="Electronic signature" placeholder="Type your full name to sign">
               <input id="note-${escapeHtml(invoice.id)}" aria-label="Approval note" placeholder="Note (required to reject)">
               <button data-action="approve" data-id="${escapeHtml(invoice.id)}">Approve &amp; sign</button>
@@ -168,14 +176,14 @@
 
         $('#mineList').innerHTML = mine.length ? mine.map(invoice => `
           <article class="invoice">${summary(invoice)}
-            ${invoice.canRevise ? `<div class="actions"><button class="secondary" data-action="revise" data-id="${escapeHtml(invoice.id)}">Revise and resubmit</button></div>` : ''}
+            <div class="actions"><button class="secondary" data-action="view" data-kind="original" data-id="${escapeHtml(invoice.id)}">View invoice</button>${invoice.canRevise ? `<button class="secondary" data-action="revise" data-id="${escapeHtml(invoice.id)}">Revise and resubmit</button>` : ''}</div>
           </article>`).join('') : '<p>You have no invoices in progress.</p>';
 
         const query = $('#search').value.trim().toLowerCase();
         const matches = filed.filter(invoice => !query ||
           [invoice.vendor, invoice.invoiceNo, invoice.po].some(field => String(field).toLowerCase().includes(query)));
         $('#filedList').innerHTML = matches.length
-          ? matches.map(invoice => `<article class="invoice">${summary(invoice)}</article>`).join('')
+          ? matches.map(invoice => `<article class="invoice">${summary(invoice)}<div class="actions"><button class="secondary" data-action="view" data-kind="final" data-id="${escapeHtml(invoice.id)}">View final PDF</button></div></article>`).join('')
           : '<p>No filed invoices found.</p>';
 
         $('#adminTab').hidden = !isAdmin;
@@ -243,12 +251,37 @@
         $('#cancelRevision').hidden = true;
       }
 
+      let viewerUrl = '';
+      function closeViewer() {
+        $('#viewer').hidden = true;
+        $('#viewerFrame').removeAttribute('src');
+        if (viewerUrl) URL.revokeObjectURL(viewerUrl);
+        viewerUrl = '';
+      }
+      function openViewer(id, kind) {
+        setBusy('Loading invoice…');
+        google.script.run.withSuccessHandler(file => {
+          setBusy('');
+          const bytes = Uint8Array.from(atob(file.data), char => char.charCodeAt(0));
+          viewerUrl = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
+          $('#viewerTitle').textContent = file.name;
+          $('#viewerOpen').href = viewerUrl;
+          $('#viewerFrame').src = viewerUrl;
+          $('#viewer').hidden = false;
+        }).withFailureHandler(error => {
+          setBusy('');
+          toast(error.message || String(error), true);
+        }).getInvoiceFile(id, kind);
+      }
+      $('#viewerClose').addEventListener('click', closeViewer);
+
       document.addEventListener('click', event => {
         const button = event.target.closest('button[data-action]');
         if (!button) return;
         const id = button.dataset.id;
         const action = button.dataset.action;
         if (action === 'revise') return startRevision(id);
+        if (action === 'view') return openViewer(id, button.dataset.kind);
         if (action === 'retry') {
           return run('Retrying finalization…', 'retryFinalization', [id], 'Invoice filed.').catch(() => {});
         }
