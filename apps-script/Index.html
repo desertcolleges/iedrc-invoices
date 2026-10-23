@@ -1,0 +1,233 @@
+<!doctype html>
+<html>
+  <head>
+    <base target="_top">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+      :root { font-family: Arial, sans-serif; color: #1f2937; background: #f3f4f6; }
+      body { margin: 0; }
+      header { background: #12395b; color: white; padding: 1rem max(1rem, calc((100% - 1000px) / 2)); }
+      main { max-width: 1000px; margin: 1.5rem auto; padding: 0 1rem; }
+      section, .invoice { background: white; padding: 1rem; border-radius: 8px; margin-bottom: 1rem; box-shadow: 0 1px 3px #0001; }
+      form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .8rem; }
+      label { display: grid; gap: .3rem; font-size: .9rem; }
+      label.full { grid-column: 1 / -1; }
+      input, textarea, select, button { font: inherit; padding: .55rem; }
+      textarea { min-height: 4rem; }
+      button { cursor: pointer; border: 0; border-radius: 4px; background: #155e8a; color: white; }
+      button.secondary { background: #6b7280; }
+      button.reject { background: #a12b2b; }
+      .actions { display: flex; gap: .5rem; margin-top: .7rem; }
+      .error { color: #a12b2b; white-space: pre-wrap; }
+      .muted { color: #6b7280; }
+      @media (max-width: 600px) { form { grid-template-columns: 1fr; } label.full { grid-column: auto; } }
+    </style>
+  </head>
+  <body>
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+    <header><strong>IEDRC Invoice Approval</strong><span id="identity" style="float:right"></span><button id="signOut" class="secondary" hidden style="float:right;margin-right:1rem">Sign out</button></header>
+    <main id="login">
+      <section>
+        <h2>Sign in</h2>
+        <p>Use your organization Google account to continue.</p>
+        <div id="googleSignIn" data-client-id="<?= clientId ?>"></div>
+        <p id="loginMessage" class="error" role="status"></p>
+      </section>
+    </main>
+    <main id="app" hidden>
+      <section id="setup" hidden>
+        <h2>Initialize invoice approval</h2>
+        <p>Set up the app's Sheets tabs before submitting invoices.</p>
+        <button id="initialize">Initialize sheets</button>
+      </section>
+      <section id="notReady" hidden>
+        <p>The app is not initialized yet. Ask an administrator to complete setup.</p>
+      </section>
+      <section>
+        <h2>Submit an invoice</h2>
+        <form id="submission">
+          <label>Vendor<input name="vendor" required maxlength="200"></label>
+          <label>PO number<input name="po" required maxlength="100"></label>
+          <label>Invoice number<input name="invoiceNo" required maxlength="100"></label>
+          <label>Invoice date<input name="invoiceDate" type="date" required></label>
+          <label>Amount<input name="amount" type="number" min="0" step="0.01" required></label>
+          <label>Approver 1<select name="approver1" required></select></label>
+          <label>Approver 2 (optional)<select name="approver2"><option value="">No second approver</option></select></label>
+          <label class="full">Notes<textarea name="notes" maxlength="500"></textarea></label>
+          <label class="full">Invoice PDF<input name="file" type="file" accept="application/pdf,.pdf" required></label>
+          <div class="full"><button type="submit">Submit invoice</button> <button type="button" class="secondary" id="cancelRevision" hidden>Cancel revision</button></div>
+        </form>
+        <p id="formMessage" class="error" role="status"></p>
+      </section>
+      <section>
+        <h2>My invoices and approvals</h2>
+        <div id="invoices" class="muted">Loading…</div>
+      </section>
+    </main>
+    <script>
+      const $ = selector => document.querySelector(selector);
+      let revisionId = '';
+      let idToken = '';
+      const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char =>
+        ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
+      function showError(target, error) { target.textContent = error.message || String(error); }
+      function handleAuthError(target, error) {
+        showError(target, error);
+        if ((error.message || '').includes('Google sign-in has expired')) {
+          idToken = '';
+          $('#app').hidden = true;
+          $('#login').hidden = false;
+          $('#signOut').hidden = true;
+          $('#loginMessage').textContent = 'Your sign-in expired. Sign in again.';
+        }
+      }
+      function refresh() {
+        google.script.run.withSuccessHandler(data => {
+          $('#invoices').innerHTML = data.length ? data.map(invoice => `
+            <article class="invoice">
+              <strong>${escapeHtml(invoice.vendor)} — ${escapeHtml(invoice.invoiceNo)}</strong>
+              <div>${escapeHtml(invoice.status)} · $${Number(invoice.amount).toFixed(2)} · ${escapeHtml(invoice.submitter)}</div>
+              ${invoice.canRevise ? `<div class="actions"><button class="secondary" onclick="startRevision('${escapeHtml(invoice.id)}')">Revise and resubmit</button></div>` : ''}
+              ${invoice.canApprove ? `<div class="actions">
+                <input id="sig-${escapeHtml(invoice.id)}" aria-label="Electronic signature" placeholder="Type your full name">
+                <input id="note-${escapeHtml(invoice.id)}" aria-label="Approval note" placeholder="Note or rejection reason">
+                <button onclick="decide('${escapeHtml(invoice.id)}','approve')">Approve & sign</button>
+                <button class="reject" onclick="decide('${escapeHtml(invoice.id)}','reject')">Reject</button>
+              </div>` : ''}
+              ${invoice.canRetry ? `<div class="actions"><button class="secondary" onclick="retry('${escapeHtml(invoice.id)}')">Retry finalization</button></div>` : ''}
+            </article>`).join('') : '<p>No invoices to show.</p>';
+          window.invoiceData = data;
+        }).withFailureHandler(error => handleAuthError($('#invoices'), error)).getDashboard(idToken);
+      }
+      function startRevision(id) {
+        const invoice = window.invoiceData.find(item => item.id === id);
+        if (!invoice) return;
+        revisionId = id;
+        const form = $('#submission');
+        ['vendor', 'po', 'invoiceNo', 'invoiceDate', 'amount', 'notes', 'approver1', 'approver2'].forEach(key => {
+          form.elements[key].value = invoice[key] ?? '';
+        });
+        form.elements.file.required = true;
+        form.querySelector('button[type=submit]').textContent = 'Resubmit invoice';
+        $('#cancelRevision').hidden = false;
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }
+      function cancelRevision() {
+        revisionId = '';
+        $('#submission').reset();
+        $('#submission').querySelector('button[type=submit]').textContent = 'Submit invoice';
+        $('#cancelRevision').hidden = true;
+      }
+      function retry(id) {
+        google.script.run.withSuccessHandler(refresh)
+          .withFailureHandler(error => handleAuthError($('#invoices'), error)).retryFinalization(id, idToken);
+      }
+      function decide(id, action) {
+        const signature = $(`#sig-${CSS.escape(id)}`)?.value || '';
+        const note = $(`#note-${CSS.escape(id)}`)?.value || '';
+        google.script.run.withSuccessHandler(refresh)
+          .withFailureHandler(error => handleAuthError($('#invoices'), error))
+          .decideInvoice({ id, action, signature, note }, idToken);
+      }
+      function loadApp() {
+        $('#login').hidden = true;
+        $('#app').hidden = false;
+        $('#signOut').hidden = false;
+        google.script.run.withSuccessHandler(info => {
+        $('#identity').textContent = info.user;
+        $('#setup').hidden = info.initialized || !info.admin;
+        $('#notReady').hidden = info.initialized || info.admin;
+        $('#submission').closest('section').hidden = !info.initialized;
+        $('#invoices').closest('section').hidden = !info.initialized;
+        const selects = [document.querySelector('[name=approver1]'), document.querySelector('[name=approver2]')];
+        selects.forEach(select => {
+          while (select.options.length > (select.name === 'approver2' ? 1 : 0)) select.remove(select.options.length - 1);
+        });
+        info.approvers.forEach(approver => {
+          const option = new Option(`${approver.name} (${approver.email})`, approver.email);
+          selects.forEach(select => select.add(option.cloneNode(true)));
+        });
+        selects[0].value = info.defaultApprover;
+        if (info.initialized) refresh();
+        }).withFailureHandler(error => {
+          $('#app').hidden = true;
+          $('#login').hidden = false;
+          $('#signOut').hidden = true;
+          handleAuthError($('#loginMessage'), error);
+        }).getSetupInfo(idToken);
+      }
+      function handleCredentialResponse(response) {
+        idToken = response.credential;
+        loadApp();
+      }
+      function initializeGoogleSignIn() {
+        google.accounts.id.initialize({
+          client_id: $('#googleSignIn').dataset.clientId,
+          callback: handleCredentialResponse,
+        });
+        google.accounts.id.renderButton($('#googleSignIn'), { theme: 'outline', size: 'large' });
+      }
+      window.handleCredentialResponse = handleCredentialResponse;
+      window.initializeGoogleSignIn = initializeGoogleSignIn;
+      window.addEventListener('load', initializeGoogleSignIn);
+      $('#signOut').addEventListener('click', () => {
+        idToken = '';
+        $('#identity').textContent = '';
+        $('#signOut').hidden = true;
+        $('#app').hidden = true;
+        $('#login').hidden = false;
+        $('#loginMessage').textContent = '';
+        google.accounts.id.disableAutoSelect();
+      });
+      $('#initialize').addEventListener('click', () => {
+        const button = $('#initialize');
+        button.disabled = true;
+        google.script.run.withSuccessHandler(loadApp)
+          .withFailureHandler(error => {
+            showError($('#loginMessage'), error);
+            button.disabled = false;
+          }).initializeSheets(idToken);
+      });
+      $('#submission').addEventListener('submit', async event => {
+        event.preventDefault();
+        const form = event.currentTarget;
+        const button = form.querySelector('button[type=submit]');
+        const message = $('#formMessage');
+        message.textContent = '';
+        button.disabled = true;
+        try {
+          const file = form.elements.file.files[0];
+          if (!file || file.type !== 'application/pdf') throw new Error('Choose a PDF invoice.');
+          const data = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result.split(',')[1]);
+            reader.onerror = () => reject(new Error('Could not read the selected PDF.'));
+            reader.readAsDataURL(file);
+          });
+          const input = Object.fromEntries(new FormData(form).entries());
+          delete input.file;
+          input.file = { name: file.name, data };
+          const method = revisionId ? 'resubmitInvoice' : 'submitInvoice';
+          if (revisionId) input.invoiceId = revisionId;
+          google.script.run.withSuccessHandler(() => {
+            revisionId = '';
+            form.reset();
+            form.querySelector('button[type=submit]').textContent = 'Submit invoice';
+            $('#cancelRevision').hidden = true;
+            message.className = '';
+            message.textContent = 'Invoice submitted.';
+            refresh();
+            button.disabled = false;
+          }).withFailureHandler(error => {
+            showError(message, error);
+            button.disabled = false;
+          })[method](input, idToken);
+        } catch (error) {
+          showError(message, error);
+          button.disabled = false;
+        }
+      });
+        $('#cancelRevision').addEventListener('click', cancelRevision);
+    </script>
+  </body>
+</html>
