@@ -258,20 +258,31 @@
         if (viewerUrl) URL.revokeObjectURL(viewerUrl);
         viewerUrl = '';
       }
-      function openViewer(id, kind) {
+      function call(name, args) {
+        return new Promise((resolve, reject) => {
+          google.script.run.withSuccessHandler(resolve).withFailureHandler(reject)[name](...args);
+        });
+      }
+      async function openViewer(id, kind) {
         setBusy('Loading invoice…');
-        google.script.run.withSuccessHandler(file => {
-          setBusy('');
-          const bytes = Uint8Array.from(atob(file.data), char => char.charCodeAt(0));
-          viewerUrl = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
-          $('#viewerTitle').textContent = file.name;
+        try {
+          const info = await call('getInvoiceFileInfo', [id, kind]);
+          const parts = [];
+          for (let index = 0; index < info.chunks; index++) {
+            setBusy(`Loading invoice… ${index + 1} of ${info.chunks}`);
+            const data = await call('getInvoiceChunk', [id, kind, index]);
+            parts.push(Uint8Array.from(atob(data), char => char.charCodeAt(0)));
+          }
+          viewerUrl = URL.createObjectURL(new Blob(parts, { type: 'application/pdf' }));
+          $('#viewerTitle').textContent = info.name;
           $('#viewerOpen').href = viewerUrl;
           $('#viewerFrame').src = viewerUrl;
           $('#viewer').hidden = false;
-        }).withFailureHandler(error => {
-          setBusy('');
+        } catch (error) {
           toast(error.message || String(error), true);
-        }).getInvoiceFile(id, kind);
+        } finally {
+          setBusy('');
+        }
       }
       $('#viewerClose').addEventListener('click', closeViewer);
 

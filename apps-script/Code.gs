@@ -86,7 +86,9 @@ function getDashboard() {
     });
 }
 
-function getInvoiceFile(id, kind) {
+const CHUNK_BYTES = 600000;
+
+function resolveInvoiceFile_(id, kind) {
   const user = requireUser_();
   const db = getDb_();
   const invoice = getInvoices_(db).find(row => row.ID === id);
@@ -94,13 +96,22 @@ function getInvoiceFile(id, kind) {
   const filed = invoice.Status === 'Filed' && invoice.FinalFileId;
   const involved = isAdmin_(db, user.email) || invoice.SubmitterEmail === user.email ||
     getApprovals_(db).some(row => row.InvoiceID === id && row.ApproverEmail === user.email);
-  if (!filed && !involved) throw new Error('You do not have access to this invoice.');
   const useFinal = kind === 'final' && filed;
-  if (!useFinal && !involved) throw new Error('You do not have access to this invoice.');
-  const file = DriveApp.getFileById(useFinal ? invoice.FinalFileId : invoice.OriginalFileId);
-  const blob = file.getBlob();
-  if (blob.getBytes().length > 20000000) throw new Error('File is too large to preview. Open it from Drive.');
-  return { name: file.getName(), data: Utilities.base64Encode(blob.getBytes()) };
+  if (!(useFinal || involved)) throw new Error('You do not have access to this invoice.');
+  return DriveApp.getFileById(useFinal ? invoice.FinalFileId : invoice.OriginalFileId);
+}
+
+function getInvoiceFileInfo(id, kind) {
+  const file = resolveInvoiceFile_(id, kind);
+  const size = file.getSize();
+  if (size > 30000000) throw new Error('File is too large to preview. Open it from Drive.');
+  return { name: file.getName(), chunks: Math.max(1, Math.ceil(size / CHUNK_BYTES)) };
+}
+
+function getInvoiceChunk(id, kind, index) {
+  const bytes = resolveInvoiceFile_(id, kind).getBlob().getBytes();
+  const start = Number(index) * CHUNK_BYTES;
+  return Utilities.base64Encode(bytes.slice(start, start + CHUNK_BYTES));
 }
 
 function getSetupInfo() {
