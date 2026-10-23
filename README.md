@@ -35,12 +35,10 @@ The initial signature is a typed name with a timestamp and audit record. It is n
    ```
 
    Grant the Cloud Run runtime service account Secret Manager access to `iedrc-pdf-service-token`. The service is publicly reachable because Apps Script cannot obtain the Google ID token a private Cloud Run service requires; every request must carry the secret `X-Service-Token`, so keep that token private and rotate it if exposed. Copy its service URL and append `/merge` for `PDF_SERVICE_URL`.
-5. Create a Google OAuth client ID of type **Web application** for Google Identity Services. Configure its authorized JavaScript origins for the deployed Apps Script HtmlService page, and limit it to the organization's OAuth consent audience. Use a test account to confirm that Google sign-in works on the deployed app.
-6. Create an Apps Script project, add `apps-script/Code.gs` and `apps-script/Index.html`, and set the project manifest from `apps-script/appsscript.json`. Set the following **Script Properties** (IDs are the strings from each Google URL):
+5. Create an Apps Script project, add `apps-script/Code.gs` and `apps-script/Index.html`, and set the project manifest from `apps-script/appsscript.json`. Set the following **Script Properties** (IDs are the strings from each Google URL):
 
    | Property | Value |
    |---|---|
-   | `GOOGLE_CLIENT_ID` | OAuth Web client ID from step 5 |
    | `SPREADSHEET_ID` | ID of the app data Sheet |
    | `WORKING_FOLDER_ID` | ID of the working Shared Drive folder |
    | `ARCHIVE_FOLDER_ID` | ID of the completed-invoices Shared Drive folder |
@@ -56,7 +54,7 @@ The initial signature is a typed name with a timestamp and audit record. It is n
 7. Deploy the Apps Script as a **Web app**, executing as **you (the deployer/owner)**, with access limited to your Workspace domain. The owner account runs Drive, Sheets, Docs, Gmail, and Cloud Run calls; app users do not need direct access to those resources.
 8. Sign in to the deployed app with an address listed in `ADMIN_EMAILS` and select **Initialize sheets**. In the generated `Approvers` sheet, add approvers with `Name`, `Email`, `Title`, and `Active` set to `TRUE`. Confirm the `Admins` sheet lists the intended administrators.
 
-The app uses Google Identity Services to sign users in and verifies the ID token's audience, email verification, and hosted Workspace domain on every server request. Keep the Apps Script project editor list restricted to trusted administrators: project editors can access its Script Properties, including the PDF service token. Never commit the token or other credentials to this repository.
+The web app runs as its owner and identifies each user with `Session.getActiveUser()`, which Google supplies for users in the owner's Workspace domain. The server rejects anyone outside `ALLOWED_DOMAIN` on every request. Keep the Apps Script project editor list restricted to trusted administrators: project editors can access its Script Properties, including the PDF service token. Never commit the token or other credentials to this repository.
 
 ## PDF service local checks
 

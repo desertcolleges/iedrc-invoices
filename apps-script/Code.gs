@@ -22,16 +22,11 @@ const HEADERS = {
 };
 
 function doGet() {
-  const clientId = PropertiesService.getScriptProperties().getProperty('GOOGLE_CLIENT_ID');
-  if (!clientId) throw new Error('Set GOOGLE_CLIENT_ID in Script Properties first.');
-  const template = HtmlService.createTemplateFromFile('Index');
-  template.clientId = clientId;
-  return template.evaluate()
-    .setTitle('IEDRC Invoice Approval');
+  return HtmlService.createHtmlOutputFromFile('Index').setTitle('IEDRC Invoice Approval');
 }
 
-function initializeSheets(idToken) {
-  const user = requireUser_(idToken);
+function initializeSheets() {
+  const user = requireUser_();
   const props = PropertiesService.getScriptProperties();
   const spreadsheetId = props.getProperty('SPREADSHEET_ID');
   if (!spreadsheetId) throw new Error('Set SPREADSHEET_ID in Script Properties first.');
@@ -56,8 +51,8 @@ function initializeSheets(idToken) {
   return 'Sheets initialized.';
 }
 
-function getDashboard(idToken) {
-  const user = requireUser_(idToken);
+function getDashboard() {
+  const user = requireUser_();
   const db = getDb_();
   const admin = isAdmin_(db, user.email);
   const approvals = getApprovals_(db);
@@ -91,8 +86,8 @@ function getDashboard(idToken) {
     });
 }
 
-function getSetupInfo(idToken) {
-  const user = requireUser_(idToken);
+function getSetupInfo() {
+  const user = requireUser_();
   const db = getDb_();
   const approvers = getRows_(db, SHEETS.approvers)
     .filter(row => String(row.Active).toLowerCase() === 'true')
@@ -108,8 +103,8 @@ function getSetupInfo(idToken) {
   };
 }
 
-function submitInvoice(input, idToken) {
-  const user = requireUser_(idToken);
+function submitInvoice(input) {
+  const user = requireUser_();
   validateSubmission_(input);
   const config = getConfig_();
   const db = getDb_();
@@ -162,8 +157,8 @@ function submitInvoice(input, idToken) {
   return { id, status: invoice.Status };
 }
 
-function resubmitInvoice(input, idToken) {
-  const user = requireUser_(idToken);
+function resubmitInvoice(input) {
+  const user = requireUser_();
   validateSubmission_(input);
   const config = getConfig_();
   const db = getDb_();
@@ -224,8 +219,8 @@ function resubmitInvoice(input, idToken) {
   }
 }
 
-function decideInvoice(input, idToken) {
-  const user = requireUser_(idToken);
+function decideInvoice(input) {
+  const user = requireUser_();
   if (!input || !input.id || !['approve', 'reject'].includes(input.action)) {
     throw new Error('Invalid approval action.');
   }
@@ -293,8 +288,8 @@ function decideInvoice(input, idToken) {
   return { ok: true };
 }
 
-function retryFinalization(id, idToken) {
-  const user = requireUser_(idToken);
+function retryFinalization(id) {
+  const user = requireUser_();
   const db = getDb_();
   if (!isAdmin_(db, user.email)) throw new Error('Only an admin can retry finalization.');
   const lock = LockService.getScriptLock();
@@ -422,28 +417,11 @@ function validateSubmission_(input) {
   });
 }
 
-function requireUser_(idToken) {
-  if (typeof idToken !== 'string' || idToken.length < 100 || idToken.length > 5000) {
-    throw new Error('Sign in with your organization Google account.');
-  }
-  const props = PropertiesService.getScriptProperties();
-  const clientId = props.getProperty('GOOGLE_CLIENT_ID');
-  const domain = String(props.getProperty('ALLOWED_DOMAIN') || '').toLowerCase();
-  if (!clientId || !domain) throw new Error('Configure GOOGLE_CLIENT_ID and ALLOWED_DOMAIN.');
-  const response = UrlFetchApp.fetch(
-    `https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(idToken)}`,
-    { muteHttpExceptions: true }
-  );
-  if (response.getResponseCode() !== 200) throw new Error('Your Google sign-in has expired. Sign in again.');
-  const claims = JSON.parse(response.getContentText());
-  const email = String(claims.email || '').trim().toLowerCase();
-  const expiresAt = Number(claims.exp || 0);
-  if (claims.aud !== clientId || ![true, 'true'].includes(claims.email_verified) ||
-      claims.hd !== domain || email.split('@')[1] !== domain ||
-      !['accounts.google.com', 'https://accounts.google.com'].includes(claims.iss) ||
-      !Number.isFinite(expiresAt) || expiresAt <= Date.now() / 1000) {
-    throw new Error('Your Google account is not authorized for this application.');
-  }
+function requireUser_() {
+  const email = String(Session.getActiveUser().getEmail() || '').trim().toLowerCase();
+  const domain = String(PropertiesService.getScriptProperties().getProperty('ALLOWED_DOMAIN') || '').toLowerCase();
+  if (!domain) throw new Error('Configure ALLOWED_DOMAIN.');
+  if (!email || email.split('@')[1] !== domain) throw new Error('Your account is not authorized for this application.');
   return { email };
 }
 

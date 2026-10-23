@@ -24,21 +24,14 @@
     </style>
   </head>
   <body>
-    <script src="https://accounts.google.com/gsi/client" async defer></script>
-    <header><strong>IEDRC Invoice Approval</strong><span id="identity" style="float:right"></span><button id="signOut" class="secondary" hidden style="float:right;margin-right:1rem">Sign out</button></header>
-    <main id="login">
-      <section>
-        <h2>Sign in</h2>
-        <p>Use your organization Google account to continue.</p>
-        <div id="googleSignIn" data-client-id="<?= clientId ?>"></div>
-        <p id="loginMessage" class="error" role="status"></p>
-      </section>
-    </main>
-    <main id="app" hidden>
+    <header><strong>IEDRC Invoice Approval</strong><span id="identity" style="float:right"></span></header>
+    <main id="app">
+      <p id="appError" class="error" role="alert"></p>
       <section id="setup" hidden>
         <h2>Initialize invoice approval</h2>
         <p>Set up the app's Sheets tabs before submitting invoices.</p>
         <button id="initialize">Initialize sheets</button>
+        <p id="setupMessage" class="error" role="status"></p>
       </section>
       <section id="notReady" hidden>
         <p>The app is not initialized yet. Ask an administrator to complete setup.</p>
@@ -67,20 +60,9 @@
     <script>
       const $ = selector => document.querySelector(selector);
       let revisionId = '';
-      let idToken = '';
       const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char =>
         ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
       function showError(target, error) { target.textContent = error.message || String(error); }
-      function handleAuthError(target, error) {
-        showError(target, error);
-        if ((error.message || '').includes('Google sign-in has expired')) {
-          idToken = '';
-          $('#app').hidden = true;
-          $('#login').hidden = false;
-          $('#signOut').hidden = true;
-          $('#loginMessage').textContent = 'Your sign-in expired. Sign in again.';
-        }
-      }
       function refresh() {
         google.script.run.withSuccessHandler(data => {
           $('#invoices').innerHTML = data.length ? data.map(invoice => `
@@ -97,7 +79,7 @@
               ${invoice.canRetry ? `<div class="actions"><button class="secondary" onclick="retry('${escapeHtml(invoice.id)}')">Retry finalization</button></div>` : ''}
             </article>`).join('') : '<p>No invoices to show.</p>';
           window.invoiceData = data;
-        }).withFailureHandler(error => handleAuthError($('#invoices'), error)).getDashboard(idToken);
+        }).withFailureHandler(error => showError($('#invoices'), error)).getDashboard();
       }
       function startRevision(id) {
         const invoice = window.invoiceData.find(item => item.id === id);
@@ -120,19 +102,16 @@
       }
       function retry(id) {
         google.script.run.withSuccessHandler(refresh)
-          .withFailureHandler(error => handleAuthError($('#invoices'), error)).retryFinalization(id, idToken);
+          .withFailureHandler(error => showError($('#invoices'), error)).retryFinalization(id);
       }
       function decide(id, action) {
         const signature = $(`#sig-${CSS.escape(id)}`)?.value || '';
         const note = $(`#note-${CSS.escape(id)}`)?.value || '';
         google.script.run.withSuccessHandler(refresh)
-          .withFailureHandler(error => handleAuthError($('#invoices'), error))
-          .decideInvoice({ id, action, signature, note }, idToken);
+          .withFailureHandler(error => showError($('#invoices'), error))
+          .decideInvoice({ id, action, signature, note });
       }
       function loadApp() {
-        $('#login').hidden = true;
-        $('#app').hidden = false;
-        $('#signOut').hidden = false;
         google.script.run.withSuccessHandler(info => {
         $('#identity').textContent = info.user;
         $('#setup').hidden = info.initialized || !info.admin;
@@ -150,43 +129,18 @@
         selects[0].value = info.defaultApprover;
         if (info.initialized) refresh();
         }).withFailureHandler(error => {
-          $('#app').hidden = true;
-          $('#login').hidden = false;
-          $('#signOut').hidden = true;
-          handleAuthError($('#loginMessage'), error);
-        }).getSetupInfo(idToken);
+          showError($('#appError'), error);
+        }).getSetupInfo();
       }
-      function handleCredentialResponse(response) {
-        idToken = response.credential;
-        loadApp();
-      }
-      function initializeGoogleSignIn() {
-        google.accounts.id.initialize({
-          client_id: $('#googleSignIn').dataset.clientId,
-          callback: handleCredentialResponse,
-        });
-        google.accounts.id.renderButton($('#googleSignIn'), { theme: 'outline', size: 'large' });
-      }
-      window.handleCredentialResponse = handleCredentialResponse;
-      window.initializeGoogleSignIn = initializeGoogleSignIn;
-      window.addEventListener('load', initializeGoogleSignIn);
-      $('#signOut').addEventListener('click', () => {
-        idToken = '';
-        $('#identity').textContent = '';
-        $('#signOut').hidden = true;
-        $('#app').hidden = true;
-        $('#login').hidden = false;
-        $('#loginMessage').textContent = '';
-        google.accounts.id.disableAutoSelect();
-      });
+      window.addEventListener('load', loadApp);
       $('#initialize').addEventListener('click', () => {
         const button = $('#initialize');
         button.disabled = true;
         google.script.run.withSuccessHandler(loadApp)
           .withFailureHandler(error => {
-            showError($('#loginMessage'), error);
+            showError($('#setupMessage'), error);
             button.disabled = false;
-          }).initializeSheets(idToken);
+          }).initializeSheets();
       });
       $('#submission').addEventListener('submit', async event => {
         event.preventDefault();
@@ -221,7 +175,7 @@
           }).withFailureHandler(error => {
             showError(message, error);
             button.disabled = false;
-          })[method](input, idToken);
+          })[method](input);
         } catch (error) {
           showError(message, error);
           button.disabled = false;
