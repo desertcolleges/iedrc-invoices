@@ -49,3 +49,23 @@ test('merge endpoint prepends the topsheet pages to the invoice pages', async ()
   const merged = await PDFDocument.load(Buffer.from(result.pdf, 'base64'));
   assert.equal(merged.getPageCount(), 3);
 });
+
+test('merge endpoint drops leading topsheet pages when requested', async () => {
+  const make = async count => {
+    const document = await PDFDocument.create();
+    for (let i = 0; i < count; i++) document.addPage();
+    return Buffer.from(await document.save()).toString('base64');
+  };
+  const call = body => fetch(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Service-Token': process.env.PDF_SERVICE_TOKEN },
+    body: JSON.stringify(body),
+  });
+  const topsheet = await make(2);
+  const invoice = await make(2);
+  const ok = await call({ topsheet, invoice, topsheetSkipPages: 1 });
+  const merged = await PDFDocument.load(Buffer.from((await ok.json()).pdf, 'base64'));
+  assert.equal(merged.getPageCount(), 3);
+  const tooMany = await call({ topsheet, invoice, topsheetSkipPages: 2 });
+  assert.equal(tooMany.status, 400);
+});

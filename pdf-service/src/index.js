@@ -23,10 +23,13 @@ app.post('/merge', async (request, response) => {
     if (topsheet.length > maxPdfBytes || invoice.length > maxPdfBytes) {
       return response.status(413).json({ error: 'PDF exceeds the service size limit.' });
     }
+    const skip = Number(request.body?.topsheetSkipPages ?? 0);
+    if (!Number.isInteger(skip) || skip < 0 || skip > 5) throw new Error('Invalid topsheetSkipPages.');
     const output = await PDFDocument.create();
-    for (const bytes of [topsheet, invoice]) {
+    for (const [bytes, skipPages] of [[topsheet, skip], [invoice, 0]]) {
       const source = await PDFDocument.load(bytes, { updateMetadata: false });
-      const pages = await output.copyPages(source, source.getPageIndices());
+      if (skipPages >= source.getPageCount()) throw new Error('Topsheet has no pages left after skipping.');
+      const pages = await output.copyPages(source, source.getPageIndices().slice(skipPages));
       pages.forEach(page => output.addPage(page));
     }
     const pdf = await output.save();

@@ -383,6 +383,7 @@ function mergePdfs_(topsheet, original) {
     payload: JSON.stringify({
       topsheet: Utilities.base64Encode(topsheet.getBytes()),
       invoice: Utilities.base64Encode(original.getBytes()),
+      topsheetSkipPages: config.topsheetSkipPages,
     }),
     muteHttpExceptions: true,
   });
@@ -442,6 +443,7 @@ function getConfig_() {
     defaultApprover: props.getProperty('DEFAULT_APPROVER') || '',
     apEmail: props.getProperty('AP_EMAIL') || '',
     maxUploadBytes: Number(props.getProperty('MAX_UPLOAD_BYTES') || 8000000),
+    topsheetSkipPages: Number(props.getProperty('TOPSHEET_SKIP_PAGES') || 1),
   };
   const required = ['spreadsheetId', 'workingFolderId', 'archiveFolderId', 'templateDocId', 'pdfServiceUrl', 'pdfServiceToken', 'apEmail'];
   const missing = required.filter(key => !config[key]);

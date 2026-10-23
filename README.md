@@ -49,6 +49,7 @@ The initial signature is a typed name with a timestamp and audit record. It is n
    | `ALLOWED_DOMAIN` | Workspace email domain, without `@` |
    | `DEFAULT_APPROVER` | Default first approver's email |
    | `AP_EMAIL` | Accounts Payable mailbox |
+   | `TOPSHEET_SKIP_PAGES` | Optional; leading topsheet PDF pages to drop (default 1, for the tab-title page Google Docs prints). Set `0` if your export has none |
    | `MAX_UPLOAD_BYTES` | Optional; default is 8,000,000 bytes |
 
 7. Deploy the Apps Script as a **Web app**, executing as **you (the deployer/owner)**, with access limited to your Workspace domain. The owner account runs Drive, Sheets, Docs, Gmail, and Cloud Run calls; app users do not need direct access to those resources.
