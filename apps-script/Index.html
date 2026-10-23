@@ -40,7 +40,8 @@
       @media (max-width: 600px) { form { grid-template-columns: 1fr; } label.full { grid-column: auto; } }
       #viewer { position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 9; padding: 16px; }
       #viewer > div { background: #fff; height: 100%; display: flex; flex-direction: column; padding: 12px; border-radius: 8px; }
-      #viewer iframe { flex: 1; border: 0; margin-top: 8px; }
+      #viewerPages { flex: 1; overflow: auto; margin-top: 8px; background: #888; text-align: center; }
+      #viewerPages canvas { max-width: 100%; margin: 8px auto; display: block; background: #fff; }
     </style>
   </head>
   <body>
@@ -108,10 +109,12 @@
     </main>
     <div id="busy" hidden role="alert" aria-live="assertive"><div><div class="spinner"></div><strong id="busyText">Working…</strong><p class="muted">Please keep this page open.</p></div></div>
     <div id="viewer" hidden><div>
-      <div class="actions"><strong id="viewerTitle"></strong><a id="viewerOpen" target="_blank" rel="noopener">Open in new tab</a><button id="viewerClose" class="secondary" type="button">Close</button></div>
-      <iframe id="viewerFrame" title="Invoice PDF"></iframe>
+      <div class="actions"><strong id="viewerTitle"></strong><a id="viewerOpen" download="invoice.pdf">Download</a><button id="viewerClose" class="secondary" type="button">Close</button></div>
+      <div id="viewerPages"></div>
     </div></div>
     <div id="toast" hidden role="status"></div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js"></script>
     <script>
       const $ = selector => document.querySelector(selector);
       let revisionId = '';
@@ -254,7 +257,7 @@
       let viewerUrl = '';
       function closeViewer() {
         $('#viewer').hidden = true;
-        $('#viewerFrame').removeAttribute('src');
+        $('#viewerPages').innerHTML = '';
         if (viewerUrl) URL.revokeObjectURL(viewerUrl);
         viewerUrl = '';
       }
@@ -273,11 +276,24 @@
             const data = await call('getInvoiceChunk', [id, kind, index]);
             parts.push(Uint8Array.from(atob(data), char => char.charCodeAt(0)));
           }
-          viewerUrl = URL.createObjectURL(new Blob(parts, { type: 'application/pdf' }));
+          const blob = new Blob(parts, { type: 'application/pdf' });
+          viewerUrl = URL.createObjectURL(blob);
           $('#viewerTitle').textContent = info.name;
           $('#viewerOpen').href = viewerUrl;
-          $('#viewerFrame').src = viewerUrl;
+          $('#viewerOpen').download = info.name;
+          $('#viewerPages').innerHTML = '';
           $('#viewer').hidden = false;
+          if (!window.pdfjsLib) throw new Error('PDF viewer failed to load. Use Download instead.');
+          const pdf = await pdfjsLib.getDocument({ data: await blob.arrayBuffer() }).promise;
+          for (let number = 1; number <= pdf.numPages; number++) {
+            const page = await pdf.getPage(number);
+            const viewport = page.getViewport({ scale: 1.5 });
+            const canvas = document.createElement('canvas');
+            canvas.width = viewport.width;
+            canvas.height = viewport.height;
+            $('#viewerPages').appendChild(canvas);
+            await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+          }
         } catch (error) {
           toast(error.message || String(error), true);
         } finally {
