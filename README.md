@@ -30,11 +30,11 @@ The initial signature is a typed name with a timestamp and audit record. It is n
    gcloud run deploy iedrc-invoice-pdf \
      --source pdf-service \
      --region YOUR_REGION \
-     --no-allow-unauthenticated \
+     --allow-unauthenticated \
      --set-secrets PDF_SERVICE_TOKEN=iedrc-pdf-service-token:latest
    ```
 
-   Grant the Cloud Run runtime service account Secret Manager access to `iedrc-pdf-service-token`. Grant `roles/run.invoker` on this service to the Apps Script deployer/owner account. Do not make the service public. Copy its service URL and append `/merge` for `PDF_SERVICE_URL`.
+   Grant the Cloud Run runtime service account Secret Manager access to `iedrc-pdf-service-token`. The service is publicly reachable because Apps Script cannot obtain the Google ID token a private Cloud Run service requires; every request must carry the secret `X-Service-Token`, so keep that token private and rotate it if exposed. Copy its service URL and append `/merge` for `PDF_SERVICE_URL`.
 5. Create a Google OAuth client ID of type **Web application** for Google Identity Services. Configure its authorized JavaScript origins for the deployed Apps Script HtmlService page, and limit it to the organization's OAuth consent audience. Use a test account to confirm that Google sign-in works on the deployed app.
 6. Create an Apps Script project, add `apps-script/Code.gs` and `apps-script/Index.html`, and set the project manifest from `apps-script/appsscript.json`. Set the following **Script Properties** (IDs are the strings from each Google URL):
 
@@ -70,7 +70,7 @@ npm test
 npm start
 ```
 
-The service requires the `PDF_SERVICE_TOKEN` environment variable and checks the `X-Service-Token` request header. In production, Cloud Run IAM authentication must also remain enabled (`--no-allow-unauthenticated`).
+The service requires the `PDF_SERVICE_TOKEN` environment variable and checks the `X-Service-Token` request header. Requests without a matching token are rejected with 401.
 
 ## MVP limitations
 

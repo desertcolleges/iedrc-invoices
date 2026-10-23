@@ -379,10 +379,7 @@ function mergePdfs_(topsheet, original) {
   const response = UrlFetchApp.fetch(config.pdfServiceUrl, {
     method: 'post',
     contentType: 'application/json',
-    headers: {
-      Authorization: `Bearer ${ScriptApp.getOAuthToken()}`,
-      'X-Service-Token': config.pdfServiceToken,
-    },
+    headers: { 'X-Service-Token': config.pdfServiceToken },
     payload: JSON.stringify({
       topsheet: Utilities.base64Encode(topsheet.getBytes()),
       invoice: Utilities.base64Encode(original.getBytes()),
