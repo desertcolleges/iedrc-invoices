@@ -454,9 +454,19 @@ function getRows_(spreadsheet, sheetName) {
   const sheet = spreadsheet.getSheetByName(sheetName);
   if (!sheet || sheet.getLastRow() < 2) return [];
   const values = sheet.getDataRange().getValues();
+  const timeZone = spreadsheet.getSpreadsheetTimeZone();
   return values.slice(1).map((row, index) => {
     const object = {};
-    values[0].forEach((key, col) => object[key] = row[col]);
+    values[0].forEach((key, col) => {
+      const value = row[col];
+      if (!(value instanceof Date)) {
+        object[key] = value;
+      } else if (key === 'InvoiceDate') {
+        object[key] = Utilities.formatDate(value, timeZone, 'yyyy-MM-dd');
+      } else {
+        object[key] = value.toISOString();
+      }
+    });
     object._row = index + 2;
     return object;
   });

@@ -65,6 +65,7 @@
       function showError(target, error) { target.textContent = error.message || String(error); }
       function refresh() {
         google.script.run.withSuccessHandler(data => {
+          data = data || [];
           $('#invoices').innerHTML = data.length ? data.map(invoice => `
             <article class="invoice">
               <strong>${escapeHtml(invoice.vendor)} — ${escapeHtml(invoice.invoiceNo)}</strong>
