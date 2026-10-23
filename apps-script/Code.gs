@@ -101,15 +101,34 @@ function resolveInvoiceFile_(id, kind) {
   return DriveApp.getFileById(useFinal ? invoice.FinalFileId : invoice.OriginalFileId);
 }
 
+function getPreviewFile_(id) {
+  const user = requireUser_();
+  const db = getDb_();
+  const invoice = getInvoices_(db).find(row => row.ID === id);
+  if (!invoice) throw new Error('Invoice not found.');
+  const involved = isAdmin_(db, user.email) || invoice.SubmitterEmail === user.email ||
+    getApprovals_(db).some(row => row.InvoiceID === id && row.ApproverEmail === user.email);
+  if (!involved) throw new Error('You do not have access to this invoice.');
+  const signed = getApprovals_(db).filter(row =>
+    row.InvoiceID === id && Number(row.Version) === Number(invoice.Version) && row.Decision === 'Signed').length;
+  const name = `Preview ${id} v${invoice.Version} s${signed}.pdf`;
+  const folder = DriveApp.getFolderById(getConfig_().workingFolderId);
+  const existing = folder.getFilesByName(name);
+  if (existing.hasNext()) return existing.next();
+  const merged = buildPackage_(invoice, db, user.email, getConfig_(), true);
+  return folder.createFile(merged.setName(name));
+}
+
 function getInvoiceFileInfo(id, kind) {
-  const file = resolveInvoiceFile_(id, kind);
+  const file = kind === 'package' ? getPreviewFile_(id) : resolveInvoiceFile_(id, kind);
   const size = file.getSize();
   if (size > 30000000) throw new Error('File is too large to preview. Open it from Drive.');
   return { name: file.getName(), chunks: Math.max(1, Math.ceil(size / CHUNK_BYTES)) };
 }
 
 function getInvoiceChunk(id, kind, index) {
-  const bytes = resolveInvoiceFile_(id, kind).getBlob().getBytes();
+  const file = kind === 'package' ? getPreviewFile_(id) : resolveInvoiceFile_(id, kind);
+  const bytes = file.getBlob().getBytes();
   const start = Number(index) * CHUNK_BYTES;
   return Utilities.base64Encode(bytes.slice(start, start + CHUNK_BYTES));
 }
@@ -337,44 +356,49 @@ function retryFinalization(id) {
   return { ok: true };
 }
 
+function buildPackage_(invoice, db, actor, config, draft) {
+  const approvalRows = getApprovals_(db).filter(row =>
+    row.InvoiceID === invoice.ID && Number(row.Version) === Number(invoice.Version) &&
+    row.Decision === 'Signed'
+  );
+  const template = DriveApp.getFileById(config.templateDocId);
+  const docCopy = template.makeCopy(`Topsheet ${invoice.ID}`, DriveApp.getFolderById(config.workingFolderId));
+  const doc = DocumentApp.openById(docCopy.getId());
+  const body = doc.getBody();
+  const replacements = {
+    VENDOR: invoice.Vendor, PO: invoice.PO, INVOICE_NO: invoice.InvoiceNo,
+    INVOICE_DATE: invoice.InvoiceDate, AMOUNT: formatAmount_(invoice.Amount),
+    NOTES: invoice.Notes, APPROVER1_NAME: '', APPROVER1_SIG: '',
+    APPROVER1_DATE: '', APPROVER1_NOTES: '', APPROVER2_NAME: '',
+    APPROVER2_SIG: '', APPROVER2_DATE: '', APPROVER2_NOTES: '',
+  };
+  approvalRows.forEach(row => {
+    const order = Number(row.Order);
+    replacements[`APPROVER${order}_NAME`] = getApproverName_(db, row.ApproverEmail);
+    replacements[`APPROVER${order}_SIG`] = row.Signature;
+    replacements[`APPROVER${order}_DATE`] = row.SignedAt;
+    replacements[`APPROVER${order}_NOTES`] = row.Note;
+  });
+  const sections = [body, doc.getHeader(), doc.getFooter()].filter(Boolean);
+  Object.keys(replacements).forEach(key => {
+    const value = String(replacements[key] || '').replace(/[\\$]/g, '\\$&');
+    sections.forEach(section => section.replaceText(`\\{\\{\\s*${key}\\s*\\}\\}`, value));
+  });
+  const unresolved = sections.map(section => section.getText().match(/\{\{[^}]*\}\}/g) || [])
+    .reduce((all, found) => all.concat(found), []);
+  if (unresolved.length && !draft) audit_(db, invoice.ID, actor, 'Topsheet placeholders not filled', { unresolved });
+  doc.saveAndClose();
+  const topsheet = DriveApp.getFileById(docCopy.getId()).getAs(MimeType.PDF);
+  if (draft) DriveApp.getFileById(docCopy.getId()).setTrashed(true);
+  const original = DriveApp.getFileById(invoice.OriginalFileId).getBlob();
+  return mergePdfs_(topsheet, original);
+}
+
 function finalizeInvoice_(invoice, actor) {
   const config = getConfig_();
   const db = getDb_();
   try {
-    const approvalRows = getApprovals_(db).filter(row =>
-      row.InvoiceID === invoice.ID && Number(row.Version) === Number(invoice.Version) &&
-      row.Decision === 'Signed'
-    );
-    const template = DriveApp.getFileById(config.templateDocId);
-    const docCopy = template.makeCopy(`Topsheet ${invoice.ID}`, DriveApp.getFolderById(config.workingFolderId));
-    const doc = DocumentApp.openById(docCopy.getId());
-    const body = doc.getBody();
-    const replacements = {
-      VENDOR: invoice.Vendor, PO: invoice.PO, INVOICE_NO: invoice.InvoiceNo,
-      INVOICE_DATE: invoice.InvoiceDate, AMOUNT: formatAmount_(invoice.Amount),
-      NOTES: invoice.Notes, APPROVER1_NAME: '', APPROVER1_SIG: '',
-      APPROVER1_DATE: '', APPROVER1_NOTES: '', APPROVER2_NAME: '',
-      APPROVER2_SIG: '', APPROVER2_DATE: '', APPROVER2_NOTES: '',
-    };
-    approvalRows.forEach(row => {
-      const order = Number(row.Order);
-      replacements[`APPROVER${order}_NAME`] = getApproverName_(db, row.ApproverEmail);
-      replacements[`APPROVER${order}_SIG`] = row.Signature;
-      replacements[`APPROVER${order}_DATE`] = row.SignedAt;
-      replacements[`APPROVER${order}_NOTES`] = row.Note;
-    });
-    const sections = [body, doc.getHeader(), doc.getFooter()].filter(Boolean);
-    Object.keys(replacements).forEach(key => {
-      const value = String(replacements[key] || '').replace(/[\\$]/g, '\\$&');
-      sections.forEach(section => section.replaceText(`\\{\\{\\s*${key}\\s*\\}\\}`, value));
-    });
-    const unresolved = sections.map(section => section.getText().match(/\{\{[^}]*\}\}/g) || [])
-      .reduce((all, found) => all.concat(found), []);
-    if (unresolved.length) audit_(db, invoice.ID, actor, 'Topsheet placeholders not filled', { unresolved });
-    doc.saveAndClose();
-    const topsheet = DriveApp.getFileById(docCopy.getId()).getAs(MimeType.PDF);
-    const original = DriveApp.getFileById(invoice.OriginalFileId).getBlob();
-    const merged = mergePdfs_(topsheet, original);
+    const merged = buildPackage_(invoice, db, actor, config, false);
     const vendorFolder = getOrCreateFolder_(DriveApp.getFolderById(config.archiveFolderId), safeName_(invoice.Vendor));
     const filename = [
       safeName_(invoice.Vendor), safeName_(invoice.InvoiceNo),

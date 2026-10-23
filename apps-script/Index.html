@@ -169,7 +169,7 @@
         $('#pendingList').innerHTML = pending.length ? pending.map(invoice => `
           <article class="invoice">${summary(invoice)}
             <div class="actions">
-              <button class="secondary" data-action="view" data-kind="original" data-id="${escapeHtml(invoice.id)}">Review invoice</button>
+              <button class="secondary" data-action="view" data-kind="package" data-id="${escapeHtml(invoice.id)}">Review invoice</button>
               <input id="sig-${escapeHtml(invoice.id)}" aria-label="Electronic signature" placeholder="Type your full name to sign">
               <input id="note-${escapeHtml(invoice.id)}" aria-label="Approval note" placeholder="Note (required to reject)">
               <button data-action="approve" data-id="${escapeHtml(invoice.id)}">Approve &amp; sign</button>
@@ -179,7 +179,7 @@
 
         $('#mineList').innerHTML = mine.length ? mine.map(invoice => `
           <article class="invoice">${summary(invoice)}
-            <div class="actions"><button class="secondary" data-action="view" data-kind="original" data-id="${escapeHtml(invoice.id)}">View invoice</button>${invoice.canRevise ? `<button class="secondary" data-action="revise" data-id="${escapeHtml(invoice.id)}">Revise and resubmit</button>` : ''}</div>
+            <div class="actions"><button class="secondary" data-action="view" data-kind="package" data-id="${escapeHtml(invoice.id)}">View invoice</button>${invoice.canRevise ? `<button class="secondary" data-action="revise" data-id="${escapeHtml(invoice.id)}">Revise and resubmit</button>` : ''}</div>
           </article>`).join('') : '<p>You have no invoices in progress.</p>';
 
         const query = $('#search').value.trim().toLowerCase();
@@ -267,7 +267,7 @@
         });
       }
       async function openViewer(id, kind) {
-        setBusy('Loading invoice…');
+        setBusy(kind === 'package' ? 'Building invoice package… this can take several seconds' : 'Loading invoice…');
         try {
           const info = await call('getInvoiceFileInfo', [id, kind]);
           const parts = [];
