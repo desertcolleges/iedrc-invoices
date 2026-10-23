@@ -335,9 +335,14 @@ function finalizeInvoice_(invoice, actor) {
       replacements[`APPROVER${order}_DATE`] = row.SignedAt;
       replacements[`APPROVER${order}_NOTES`] = row.Note;
     });
-    Object.keys(replacements).forEach(key =>
-      body.replaceText(`\\{\\{${key}\\}\\}`, String(replacements[key] || ''))
-    );
+    const sections = [body, doc.getHeader(), doc.getFooter()].filter(Boolean);
+    Object.keys(replacements).forEach(key => {
+      const value = String(replacements[key] || '').replace(/[\\$]/g, '\\$&');
+      sections.forEach(section => section.replaceText(`\\{\\{\\s*${key}\\s*\\}\\}`, value));
+    });
+    const unresolved = sections.map(section => section.getText().match(/\{\{[^}]*\}\}/g) || [])
+      .reduce((all, found) => all.concat(found), []);
+    if (unresolved.length) audit_(db, invoice.ID, actor, 'Topsheet placeholders not filled', { unresolved });
     doc.saveAndClose();
     const topsheet = DriveApp.getFileById(docCopy.getId()).getAs(MimeType.PDF);
     const original = DriveApp.getFileById(invoice.OriginalFileId).getBlob();
