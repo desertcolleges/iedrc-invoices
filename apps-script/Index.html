@@ -28,6 +28,12 @@
       td, th { padding: .3rem; text-align: left; }
       td input, td select { width: 100%; box-sizing: border-box; }
       details > summary { cursor: pointer; font-weight: bold; font-size: 1.1rem; }
+      .tabbar { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: 1rem; }
+      .tabbar button { background: #e5e7eb; color: #1f2937; }
+      .tabbar button[aria-selected="true"] { background: #155e8a; color: white; }
+      .tab-panel[hidden], [hidden] { display: none !important; }
+      .panel-heading { margin-top: 0; }
+      #approverTable td:last-child { white-space: nowrap; }
       @media (max-width: 600px) { form { grid-template-columns: 1fr; } label.full { grid-column: auto; } }
     </style>
   </head>
@@ -44,8 +50,14 @@
       <section id="notReady" hidden>
         <p>The app is not initialized yet. Ask an administrator to complete setup.</p>
       </section>
-      <section>
-        <h2>Submit an invoice</h2>
+      <nav id="mainNav" class="tabbar" aria-label="Invoice workflow" hidden>
+        <button type="button" data-tab-group="main" data-tab="submit" aria-selected="true">Submit invoice</button>
+        <button type="button" data-tab-group="main" data-tab="invoices" aria-selected="false">My invoices & approvals</button>
+        <button type="button" id="signatureTab" data-tab-group="main" data-tab="signature" aria-selected="false" hidden>My signature</button>
+        <button type="button" id="adminTab" data-tab-group="main" data-tab="admin" aria-selected="false" hidden>Admin</button>
+      </nav>
+      <section id="submitPanel" class="tab-panel" data-tab-panel="main" data-tab="submit">
+        <h2 class="panel-heading">Submit an invoice</h2>
         <form id="submission">
           <label>Vendor<input name="vendor" required maxlength="200"></label>
           <label>PO number<input name="po" required maxlength="100"></label>
@@ -60,8 +72,8 @@
         </form>
         <p id="formMessage" class="error" role="status"></p>
       </section>
-      <section id="signatureSection" hidden>
-        <h2>My signature</h2>
+      <section id="signatureSection" class="tab-panel" data-tab-panel="main" data-tab="signature" hidden>
+        <h2 class="panel-heading">My signature</h2>
         <p class="muted">Draw your signature once. It is applied to the topsheet each time you approve; you do not need to sign again.</p>
         <div id="currentSignature"></div>
         <canvas id="sigPad" width="480" height="150" aria-label="Signature pad"></canvas>
@@ -71,9 +83,14 @@
         </div>
         <p id="signatureMessage" class="error" role="status"></p>
       </section>
-      <section id="adminSection" hidden>
-        <details>
-          <summary>Admin settings</summary>
+      <section id="adminSection" class="tab-panel" data-tab-panel="main" data-tab="admin" hidden>
+        <h2 class="panel-heading">Admin</h2>
+        <nav class="tabbar" aria-label="Admin sections">
+          <button type="button" data-tab-group="admin" data-tab="settings" aria-selected="true">Settings</button>
+          <button type="button" data-tab-group="admin" data-tab="approvers" aria-selected="false">Approvers</button>
+          <button type="button" data-tab-group="admin" data-tab="routing" aria-selected="false">Routing rules</button>
+        </nav>
+        <section class="tab-panel" data-tab-panel="admin" data-tab="settings">
           <form id="settingsForm">
             <label>AP email<input name="AP_EMAIL" type="email" required></label>
             <label>Default approver 1<select name="DEFAULT_APPROVER"></select></label>
@@ -85,7 +102,10 @@
             <div class="full"><button type="submit">Save settings</button> <button type="button" class="secondary" id="scheduleReminders">Enable daily reminders</button></div>
           </form>
           <p id="adminInfo" class="muted"></p>
+        </section>
+        <section class="tab-panel" data-tab-panel="admin" data-tab="approvers" hidden>
           <h3>Approvers</h3>
+          <p class="muted">Active approvers appear in the submit and default-approver selectors.</p>
           <table id="approverTable"></table>
           <form id="approverForm">
             <label>Name<input name="name" required></label>
@@ -94,15 +114,17 @@
             <label>Active<select name="active"><option value="true">Active</option><option value="false">Inactive</option></select></label>
             <div class="full"><button type="submit">Add or update approver</button></div>
           </form>
+        </section>
+        <section class="tab-panel" data-tab-panel="admin" data-tab="routing" hidden>
           <h3>Routing rules</h3>
           <p class="muted">The highest matching "minimum amount" pre-selects approvers for submitters. Leave empty for no routing.</p>
           <table id="routingTable"></table>
           <div class="actions"><button class="secondary" id="addRule" type="button">Add rule</button><button id="saveRules" type="button">Save rules</button></div>
-          <p id="adminMessage" class="error" role="status"></p>
-        </details>
+        </section>
+        <p id="adminMessage" class="error" role="status"></p>
       </section>
-      <section>
-        <h2>My invoices and approvals</h2>
+      <section id="invoicesPanel" class="tab-panel" data-tab-panel="main" data-tab="invoices" hidden>
+        <h2 class="panel-heading">My invoices and approvals</h2>
         <div id="invoices" class="muted">Loading…</div>
       </section>
     </main>
@@ -117,6 +139,17 @@
         google.script.run.withSuccessHandler(resolve).withFailureHandler(reject)[name](...args));
       function showError(target, error) { target.className = 'error'; target.textContent = error.message || String(error); }
       function showOk(target, text) { target.className = 'ok'; target.textContent = text; }
+      function activateTab(group, tab) {
+        document.querySelectorAll(`[data-tab-group="${group}"]`).forEach(button => {
+          button.setAttribute('aria-selected', String(button.dataset.tab === tab));
+        });
+        document.querySelectorAll(`[data-tab-panel="${group}"]`).forEach(panel => {
+          panel.hidden = panel.dataset.tab !== tab;
+        });
+      }
+      document.querySelectorAll('[data-tab-group]').forEach(button => {
+        button.addEventListener('click', () => activateTab(button.dataset.tabGroup, button.dataset.tab));
+      });
       const fileToBase64 = file => new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = () => resolve(reader.result.split(',')[1]);
@@ -221,13 +254,18 @@
       function fillApproverSelects(approvers, defaultApprover) {
         const selects = [$('[name=approver1]'), $('[name=approver2]')];
         selects.forEach(select => {
-          while (select.options.length > (select.name === 'approver2' ? 1 : 0)) select.remove(select.options.length - 1);
+          select.replaceChildren();
+          select.add(new Option(select.name === 'approver2' ? 'No second approver' : 'Select an approver', ''));
         });
         approvers.forEach(approver => {
           const option = new Option(`${approver.name} (${approver.email})`, approver.email);
           selects.forEach(select => select.add(option.cloneNode(true)));
         });
-        selects[0].value = defaultApprover;
+        selects[0].value = defaultApprover || '';
+        if (!approvers.length) {
+          selects[0].options[0].textContent = 'No active approvers configured';
+          selects[1].options[0].textContent = 'No active approvers configured';
+        }
       }
 
       function loadApp() {
@@ -237,11 +275,16 @@
           $('#identity').textContent = info.user;
           $('#setup').hidden = ready || !info.admin;
           $('#notReady').hidden = ready || info.admin;
-          $('#submission').closest('section').hidden = !ready;
-          $('#invoices').closest('section').hidden = !ready;
+          $('#mainNav').hidden = !ready;
+          $('#submitPanel').hidden = !ready;
+          $('#invoicesPanel').hidden = !ready;
           $('#signatureSection').hidden = !(ready && info.isApprover);
           $('#adminSection').hidden = !(ready && info.admin);
+          $('#signatureTab').hidden = !(ready && info.isApprover);
+          $('#adminTab').hidden = !(ready && info.admin);
           if (!ready) return;
+          activateTab('main', 'submit');
+          activateTab('admin', 'settings');
           fillApproverSelects(info.approvers, info.defaultApprover);
           $('#fileHint').textContent = `PDF up to ${info.maxUploadMb} MB.`;
           refresh();
@@ -298,19 +341,27 @@
 
       // Admin
       function loadAdmin() {
-        run('getAdminData').then(data => {
+        return run('getAdminData').then(data => {
           const form = $('#settingsForm');
           const select = form.elements.DEFAULT_APPROVER;
-          select.innerHTML = '<option value="">None</option>' + data.approvers.filter(item => item.active)
+          const activeApprovers = data.approvers.filter(item => item.active);
+          select.innerHTML = '<option value="">No default</option>' + activeApprovers
             .map(item => `<option value="${escapeHtml(item.email)}">${escapeHtml(item.name)} (${escapeHtml(item.email)})</option>`).join('');
+          if (!activeApprovers.length) {
+            select.innerHTML = '<option value="">Add an active approver first</option>';
+          }
           Object.keys(data.settings).forEach(key => { if (form.elements[key]) form.elements[key].value = data.settings[key]; });
+          fillApproverSelects(activeApprovers, data.settings.DEFAULT_APPROVER);
           $('#adminInfo').textContent = `Daily reminders: ${data.remindersScheduled ? 'enabled' : 'not enabled'}. Email sends remaining today: ${data.mailQuotaRemaining}.`;
-          $('#approverTable').innerHTML = '<tr><th>Name</th><th>Email</th><th>Status</th><th>Signature</th><th></th></tr>' +
+          $('#approverTable').innerHTML = data.approvers.length
+            ? '<tr><th>Name</th><th>Email</th><th>Status</th><th>Signature</th><th></th></tr>' +
             data.approvers.map(item => `<tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.email)}</td>
               <td>${item.active ? 'Active' : 'Inactive'}</td><td>${item.hasSignature ? 'Saved' : 'None'}</td>
-              <td>${item.hasSignature ? `<button class="secondary" onclick="resetSig('${escapeHtml(item.email)}')">Reset</button>` : ''}</td></tr>`).join('');
+              <td>${item.hasSignature ? `<button class="secondary" onclick="resetSig('${escapeHtml(item.email)}')">Reset</button>` : ''}</td></tr>`).join('')
+            : '<tr><td>No approvers have been added.</td></tr>';
           window.adminApprovers = data.approvers;
           renderRules(data.routing);
+          return data;
         }).catch(error => showError($('#adminMessage'), error));
       }
       function renderRules(rules) {
@@ -342,7 +393,7 @@
       $('#settingsForm').addEventListener('submit', event => {
         event.preventDefault();
         run('saveSettings', Object.fromEntries(new FormData(event.currentTarget).entries()))
-          .then(() => { showOk($('#adminMessage'), 'Settings saved.'); refreshSetup(); })
+          .then(() => { showOk($('#adminMessage'), 'Settings saved.'); return refreshSetup(); })
           .catch(error => showError($('#adminMessage'), error));
       });
       $('#approverForm').addEventListener('submit', event => {
@@ -350,7 +401,11 @@
         const form = event.currentTarget;
         const input = Object.fromEntries(new FormData(form).entries());
         input.active = input.active === 'true';
-        run('saveApprover', input).then(() => { form.reset(); showOk($('#adminMessage'), 'Approver saved.'); loadAdmin(); refreshSetup(); })
+        run('saveApprover', input).then(() => {
+          form.reset();
+          showOk($('#adminMessage'), 'Approver saved. The active approver list and default selector have been refreshed.');
+          return loadAdmin();
+        }).then(() => refreshSetup())
           .catch(error => showError($('#adminMessage'), error));
       });
       $('#scheduleReminders').addEventListener('click', () => {
@@ -358,7 +413,7 @@
           .catch(error => showError($('#adminMessage'), error));
       });
       function refreshSetup() {
-        run('getSetupInfo').then(info => {
+        return run('getSetupInfo').then(info => {
           setup = info;
           fillApproverSelects(info.approvers, info.defaultApprover);
         }).catch(error => showError($('#appError'), error));

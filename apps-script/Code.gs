@@ -125,6 +125,10 @@ function isValidEmail_(value) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value));
 }
 
+function isActive_(value) {
+  return value === true || String(value).trim().toLowerCase() === 'true';
+}
+
 function validateSettings_(input) {
   const result = {};
   const errors = [];
@@ -208,7 +212,7 @@ function getSetupInfo() {
   const settings = getSettings_(db);
   const allApprovers = getRows_(db, SHEETS.approvers);
   const approvers = allApprovers
-    .filter(row => String(row.Active).toLowerCase() === 'true')
+    .filter(row => isActive_(row.Active))
     .map(row => ({ name: row.Name, email: String(row.Email).toLowerCase(), title: row.Title }));
   const me = allApprovers.find(row => String(row.Email).trim().toLowerCase() === user.email);
   return {
@@ -268,7 +272,7 @@ function getDashboard() {
 
 function resolveApprovers_(db, user, input, settings) {
   const approvers = getRows_(db, SHEETS.approvers)
-    .filter(row => String(row.Active).toLowerCase() === 'true')
+    .filter(row => isActive_(row.Active))
     .map(row => String(row.Email).trim().toLowerCase());
   const approver1 = String(input.approver1 || settings.DEFAULT_APPROVER).trim().toLowerCase();
   const approver2 = String(input.approver2 || '').trim().toLowerCase();
@@ -695,6 +699,10 @@ function getAdminData() {
 function saveSettings(input) {
   const { user, db } = requireAdmin_();
   const settings = validateSettings_(input);
+  if (settings.DEFAULT_APPROVER && !getRows_(db, SHEETS.approvers).some(row =>
+    isActive_(row.Active) && String(row.Email).trim().toLowerCase() === settings.DEFAULT_APPROVER)) {
+    throw new Error('Choose a default approver from the active approver list.');
+  }
   withLock_(() => {
     const sheet = db.getSheetByName(SHEETS.settings);
     if (sheet.getLastRow() > 1) sheet.getRange(2, 1, sheet.getLastRow() - 1, 2).clearContent();
@@ -714,7 +722,12 @@ function saveApprover(input) {
   if (email.split('@')[1] !== domain) throw new Error('Approvers must be in the allowed domain.');
   withLock_(() => {
     const existing = findApprover_(db, email);
-    const values = { Name: name, Email: email, Title: String(input.title || '').trim(), Active: Boolean(input.active) };
+    const values = {
+      Name: name,
+      Email: email,
+      Title: String(input.title || '').trim(),
+      Active: isActive_(input.active),
+    };
     if (existing) {
       Object.keys(values).forEach(key => setCell_(db, SHEETS.approvers, existing._row, key, values[key]));
     } else {

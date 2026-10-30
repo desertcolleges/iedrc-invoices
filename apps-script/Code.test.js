@@ -62,6 +62,15 @@ test('settings validation enforces limits and normalizes emails', () => {
   assert.throws(() => validate({ ...valid, AP_EMAIL: 'nope' }), /AP email/);
 });
 
+test('active approvers are recognized whether the sheet stores booleans or text', () => {
+  const active = value => call(`isActive_(${JSON.stringify(value)})`);
+  assert.equal(active(true), true);
+  assert.equal(active('TRUE'), true);
+  assert.equal(active(false), false);
+  assert.equal(active('false'), false);
+  assert.equal(active(''), false);
+});
+
 test('reminderAction_ reminds on schedule and escalates once', () => {
   const day = 86400000;
   const now = Date.parse('2026-02-20T00:00:00Z');
