@@ -183,6 +183,9 @@
       }
       function refresh() {
         run('getDashboard').then(data => {
+          if (!Array.isArray(data)) {
+            throw new Error('The dashboard response was empty or invalid. Reload the app; if this persists, redeploy the latest Apps Script version.');
+          }
           $('#invoices').className = '';
           $('#invoices').innerHTML = data.length ? data.map(invoiceCard).join('') : '<p>No invoices to show.</p>';
           window.invoiceData = data;
@@ -352,7 +355,7 @@
           }
           Object.keys(data.settings).forEach(key => { if (form.elements[key]) form.elements[key].value = data.settings[key]; });
           fillApproverSelects(activeApprovers, data.settings.DEFAULT_APPROVER);
-          $('#adminInfo').textContent = `Daily reminders: ${data.remindersScheduled ? 'enabled' : 'not enabled'}. Email sends remaining today: ${data.mailQuotaRemaining}.`;
+          $('#adminInfo').textContent = `Daily reminders: ${data.remindersScheduled ? 'enabled' : 'not enabled'}.`;
           $('#approverTable').innerHTML = data.approvers.length
             ? '<tr><th>Name</th><th>Email</th><th>Status</th><th>Signature</th><th></th></tr>' +
             data.approvers.map(item => `<tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.email)}</td>

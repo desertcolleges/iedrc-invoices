@@ -692,7 +692,6 @@ function getAdminData() {
       active: String(row.Active).toLowerCase() === 'true',
     })),
     remindersScheduled: ScriptApp.getProjectTriggers().some(trigger => trigger.getHandlerFunction() === 'sendReminders'),
-    mailQuotaRemaining: MailApp.getRemainingDailyQuota(),
   };
 }
 
