@@ -226,35 +226,61 @@ function getSetupInfo() {
   };
 }
 
+// Everything the page needs on load in a single round trip.
+function getBootstrap() {
+  const setup = getSetupInfo();
+  const result = { setup };
+  if (!setup.initialized || setup.upgradeNeeded) return result;
+  result.dashboard = getDashboard();
+  result.vendors = getVendorHints_(getDb_());
+  if (setup.isApprover) result.signature = getMySignature();
+  if (setup.admin) result.admin = getAdminData();
+  return result;
+}
+
 function getDashboard() {
   const user = requireUser_();
   const db = getDb_();
   const admin = isAdmin_(db, user.email);
   const pendingByInvoice = new Set();
   const involved = new Set();
+  const rejections = {};
   getApprovals_(db).forEach(row => {
+    if (row.Decision === 'Rejected') rejections[`${row.InvoiceID}:${Number(row.Version)}`] = row;
     if (row.ApproverEmail !== user.email) return;
     involved.add(row.InvoiceID);
     if (row.Decision === 'Pending') pendingByInvoice.add(row.InvoiceID);
   });
-  return getInvoices_(db)
+  const now = Date.now();
+  const result = getInvoices_(db)
     .filter(row => admin || row.SubmitterEmail === user.email || involved.has(row.ID))
     .map(row => {
       const ready = row.PackageStatus === 'Ready';
       const pendingStatus = String(row.Status).startsWith('Pending');
+      const rejection = rejections[`${row.ID}:${Number(row.Version)}`];
+      const building = (pendingStatus && ['Building', 'Working'].includes(row.PackageStatus)) ||
+        ['Processing final PDF', 'Filing final PDF'].includes(row.Status);
       return {
         id: row.ID,
         status: row.Status,
         vendor: row.Vendor,
         invoiceNo: row.InvoiceNo,
-        invoiceDate: row.InvoiceDate,
+        invoiceDate: plain_(row.InvoiceDate),
         amount: Number(row.Amount),
         submitter: row.SubmitterEmail,
-        createdAt: row.CreatedAt,
+        createdAt: iso_(row.CreatedAt),
+        group: statusGroup_(row.Status),
+        awaitingMe: pendingByInvoice.has(row.ID),
+        building,
+        packageFailed: pendingStatus && row.PackageStatus === 'Failed',
+        rejectionNote: row.Status === 'Needs Revision' && rejection ? String(rejection.Note || '') : '',
+        rejectedBy: row.Status === 'Needs Revision' && rejection ? String(rejection.ApproverEmail || '') : '',
         canApprove: pendingByInvoice.has(row.ID) && ready,
         awaitingPackage: pendingByInvoice.has(row.ID) && !ready,
-        canRebuild: pendingStatus && !ready && (admin || row.SubmitterEmail === user.email),
-        canRevise: row.Status === 'Needs Revision' && row.SubmitterEmail === user.email,
+        canRebuild: pendingStatus && !ready && row.PackageStatus !== 'Building' && row.PackageStatus !== 'Working' && (admin || row.SubmitterEmail === user.email),
+        canWithdraw: (pendingStatus || row.Status === 'Needs Revision') && (admin || row.SubmitterEmail === user.email),
+        canRevise: ['Needs Revision', 'Withdrawn'].includes(row.Status) && row.SubmitterEmail === user.email,
+        canDelete: admin,
         canRetry: row.Status === 'Finalization failed' && admin,
         hasPackage: Boolean(row.PackageFileId || row.FinalFileId),
         po: row.PO,
@@ -264,6 +290,70 @@ function getDashboard() {
       };
     })
     .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+  // Recover work left behind if a background run was interrupted.
+  const stuck = getInvoices_(db).some(row => now - toMs_(row.UpdatedAt) > 90000 &&
+    ((String(row.Status).startsWith('Pending') && ['Building', 'Working'].includes(row.PackageStatus)) ||
+     ['Processing final PDF', 'Filing final PDF'].includes(row.Status)));
+  if (stuck && !queueTriggerExists_()) kickQueue_();
+  return result;
+}
+
+// Any authorized user can find invoices; only summary fields are returned.
+function findInvoices_(db, user, filters) {
+  const admin = isAdmin_(db, user.email);
+  const involved = new Set(getApprovals_(db).filter(row => row.ApproverEmail === user.email).map(row => row.InvoiceID));
+  const f = filters || {};
+  const terms = String(f.query || '').toLowerCase().split(/\s+/).filter(Boolean).slice(0, 8);
+  const group = String(f.status || '');
+  const from = /^\d{4}-\d{2}-\d{2}$/.test(f.from || '') ? f.from : '';
+  const to = /^\d{4}-\d{2}-\d{2}$/.test(f.to || '') ? f.to : '';
+  return getInvoices_(db)
+    .filter(row => {
+      if (group && statusGroup_(row.Status) !== group) return false;
+      const date = String(plain_(row.InvoiceDate));
+      if ((from && date < from) || (to && date > to)) return false;
+      const haystack = [row.Vendor, row.PO, row.InvoiceNo, row.Status, row.SubmitterEmail].join(' ').toLowerCase();
+      return terms.every(term => haystack.includes(term));
+    })
+    .sort((a, b) => iso_(b.CreatedAt).localeCompare(iso_(a.CreatedAt)))
+    .map(row => ({
+      id: row.ID, status: row.Status, vendor: row.Vendor, po: row.PO, invoiceNo: row.InvoiceNo,
+      invoiceDate: String(plain_(row.InvoiceDate)), amount: Number(row.Amount), submitter: row.SubmitterEmail,
+      canView: Boolean(row.PackageFileId || row.FinalFileId) &&
+        (admin || row.SubmitterEmail === user.email || involved.has(row.ID)),
+    }));
+}
+
+function searchInvoices(filters) {
+  const user = requireUser_();
+  const all = findInvoices_(getDb_(), user, filters);
+  return { items: all.slice(0, 100), total: all.length };
+}
+
+function exportInvoicesCsv(filters) {
+  const user = requireUser_();
+  const rows = findInvoices_(getDb_(), user, filters);
+  const header = ['Vendor', 'PO', 'Invoice number', 'Invoice date', 'Amount', 'Status', 'Submitted by'];
+  const lines = [header].concat(rows.map(item =>
+    [item.vendor, item.po, item.invoiceNo, item.invoiceDate, item.amount.toFixed(2), item.status, item.submitter]));
+  return { name: `invoices-${Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd')}.csv`,
+    csv: lines.map(line => line.map(csvCell_).join(',')).join('\r\n') };
+}
+
+// Vendors seen on past invoices, with their recent POs and the approvers last used, for form autofill.
+function getVendorHints_(db) {
+  const byVendor = {};
+  getInvoices_(db).slice().sort((a, b) => iso_(b.CreatedAt).localeCompare(iso_(a.CreatedAt))).forEach(row => {
+    const name = String(row.Vendor || '').trim();
+    if (!name) return;
+    const key = name.toLowerCase();
+    const entry = byVendor[key] || (byVendor[key] = {
+      name, approver1: String(row.Approver1 || ''), approver2: String(row.Approver2 || ''), pos: [],
+    });
+    const po = String(row.PO || '').trim();
+    if (po && !entry.pos.includes(po) && entry.pos.length < 8) entry.pos.push(po);
+  });
+  return Object.keys(byVendor).map(key => byVendor[key]).sort((a, b) => a.name.localeCompare(b.name)).slice(0, 1000);
 }
 
 function resolveApprovers_(db, user, input, settings) {
@@ -275,9 +365,7 @@ function resolveApprovers_(db, user, input, settings) {
   if (!approvers.includes(approver1) || (approver2 && !approvers.includes(approver2))) {
     throw new Error('Select active approvers from the list.');
   }
-  if (approver1 === approver2 || approver1 === user.email || approver2 === user.email) {
-    throw new Error('You cannot approve your own invoice or select the same approver twice.');
-  }
+  if (approver2 && approver1 === approver2) throw new Error('Select two different approvers.');
   return { approver1, approver2 };
 }
 
@@ -323,9 +411,8 @@ function submitInvoice(input) {
     approvalRows_(id, 1, approver1, approver2).forEach(row => appendObject_(db.getSheetByName(SHEETS.approvals), row));
     audit_(db, id, user.email, 'Submitted', { vendor: invoice.Vendor });
   });
-  const ready = preparePackage_(db, invoice, user.email, approver1,
-    `Invoice ${invoice.InvoiceNo} from ${invoice.Vendor} (${formatAmount_(invoice.Amount)}) is ready for your review.`);
-  return { id, status: invoice.Status, packageReady: ready };
+  kickQueue_();
+  return { id, status: invoice.Status, queued: true };
 }
 
 function resubmitInvoice(input) {
@@ -338,7 +425,7 @@ function resubmitInvoice(input) {
   checkDuplicates_(db, input, input.invoiceId, settings);
 
   const current = getInvoices_(db).find(row => row.ID === input.invoiceId);
-  if (!current || current.SubmitterEmail !== user.email || current.Status !== 'Needs Revision') {
+  if (!current || current.SubmitterEmail !== user.email || !['Needs Revision', 'Withdrawn'].includes(current.Status)) {
     throw new Error('This invoice is not available for revision.');
   }
   const nextVersion = Number(current.Version) + 1;
@@ -353,7 +440,7 @@ function resubmitInvoice(input) {
   try {
     withLock_(() => {
       const invoice = getInvoices_(db).find(row => row.ID === input.invoiceId);
-      if (!invoice || invoice.Status !== 'Needs Revision' || Number(invoice.Version) !== Number(current.Version)) {
+      if (!invoice || !['Needs Revision', 'Withdrawn'].includes(invoice.Status) || Number(invoice.Version) !== Number(current.Version)) {
         throw new Error('This invoice is not available for revision.');
       }
       updated = {
@@ -383,28 +470,101 @@ function resubmitInvoice(input) {
   }
   // Superseded versions are deleted; the audit sheet keeps the history.
   if (replacement) trashFile_(current.OriginalFileId);
-  const ready = preparePackage_(db, updated, user.email, approver1,
-    `Revised invoice ${updated.InvoiceNo} from ${updated.Vendor} (${formatAmount_(updated.Amount)}) is ready for your review.`);
-  return { id: updated.ID, status: 'Pending Approver 1', packageReady: ready };
+  kickQueue_();
+  return { id: updated.ID, status: 'Pending Approver 1', queued: true };
 }
 
 function rebuildPackage(id) {
   const user = requireUser_();
   const db = getDb_();
   const admin = isAdmin_(db, user.email);
-  let invoice;
   withLock_(() => {
-    invoice = getInvoices_(db).find(row => row.ID === id);
+    const invoice = getInvoices_(db).find(row => row.ID === id);
     if (!invoice || !String(invoice.Status).startsWith('Pending') || invoice.PackageStatus === 'Ready') {
       throw new Error('This invoice does not need a package rebuild.');
     }
     if (!admin && invoice.SubmitterEmail !== user.email) throw new Error('Only the submitter or an admin can rebuild the package.');
+    updateInvoice_(db.getSheetByName(SHEETS.invoices), invoice, { PackageStatus: 'Building' });
+    audit_(db, id, user.email, 'Package rebuild requested', {});
   });
-  const pending = getApprovals_(db).find(row => row.InvoiceID === id &&
-    Number(row.Version) === Number(invoice.Version) && row.Decision === 'Pending');
-  const ready = preparePackage_(db, invoice, user.email, pending ? pending.ApproverEmail : '',
-    `Invoice ${invoice.InvoiceNo} from ${invoice.Vendor} (${formatAmount_(invoice.Amount)}) is ready for your review.`);
-  if (!ready) throw new Error(`The package could not be built: ${lastPackageError_ || 'unknown error'}. See the Audit sheet for details.`);
+  kickQueue_();
+  return { ok: true, queued: true };
+}
+
+function withdrawInvoice(id) {
+  const user = requireUser_();
+  const db = getDb_();
+  const admin = isAdmin_(db, user.email);
+  let invoice;
+  let notify = '';
+  let packageFileId = '';
+  withLock_(() => {
+    invoice = getInvoices_(db).find(row => row.ID === id);
+    if (!invoice) throw new Error('Invoice not found.');
+    if (!admin && invoice.SubmitterEmail !== user.email) throw new Error('Only the submitter or an admin can withdraw an invoice.');
+    if (!String(invoice.Status).startsWith('Pending') && invoice.Status !== 'Needs Revision') {
+      throw new Error('This invoice can no longer be withdrawn.');
+    }
+    getApprovals_(db).filter(row => row.InvoiceID === id && Number(row.Version) === Number(invoice.Version) &&
+      ['Pending', 'Queued'].includes(row.Decision)).forEach(row => {
+      if (row.Decision === 'Pending') notify = row.ApproverEmail;
+      updateApproval_(db, row, { Decision: 'Withdrawn' });
+    });
+    packageFileId = String(invoice.PackageFileId || '');
+    updateInvoice_(db.getSheetByName(SHEETS.invoices), invoice, { Status: 'Withdrawn', PackageFileId: '', PackageStatus: '' });
+    audit_(db, id, user.email, 'Withdrawn', {});
+  });
+  if (packageFileId) trashFile_(packageFileId);
+  sendNotice_(notify, 'Invoice withdrawn', `Invoice ${invoice.InvoiceNo} from ${invoice.Vendor} was withdrawn and no longer needs your approval.`, id);
+  return { ok: true };
+}
+
+// Timeline for one invoice; error details are shown to admins only.
+function getHistory(id) {
+  const user = requireUser_();
+  const db = getDb_();
+  const invoice = getInvoices_(db).find(row => row.ID === id);
+  if (!invoice) throw new Error('Invoice not found.');
+  const admin = isAdmin_(db, user.email);
+  const allowed = admin || invoice.SubmitterEmail === user.email ||
+    getApprovals_(db).some(row => row.InvoiceID === id && row.ApproverEmail === user.email);
+  if (!allowed) throw new Error('You do not have access to this invoice.');
+  return getRows_(db, SHEETS.audit).filter(row => row.InvoiceID === id).map(row => {
+    let details = {};
+    try { details = JSON.parse(row.Details || '{}'); } catch (error) { details = {}; }
+    const parts = [];
+    if (details.reason) parts.push(`Reason: ${details.reason}`);
+    if (details.version) parts.push(`Version ${details.version}`);
+    if (admin && details.message) parts.push(String(details.message));
+    return { time: iso_(row.Timestamp), actor: row.Actor, action: row.Action, detail: parts.join(' · ') };
+  });
+}
+
+// Admin-only cleanup (e.g. test invoices). Filed PDFs already sent to AP are left in the archive folder.
+function deleteInvoice(id) {
+  const { user, db } = requireAdmin_();
+  withLock_(() => {
+    const invoice = getInvoices_(db).find(row => row.ID === id);
+    if (!invoice) throw new Error('Invoice not found.');
+    const approvalSheet = db.getSheetByName(SHEETS.approvals);
+    getApprovals_(db).filter(row => row.InvoiceID === id).map(row => row._row)
+      .sort((a, b) => b - a).forEach(rowNumber => approvalSheet.deleteRow(rowNumber));
+    [invoice.OriginalFileId, invoice.PackageFileId].filter(Boolean).forEach(fileId => trashFile_(String(fileId)));
+    try {
+      const parents = DriveApp.getFileById(invoice.OriginalFileId).getParents();
+      if (parents.hasNext()) {
+        const folder = parents.next();
+        if (folder.getName() === id) folder.setTrashed(true);
+      }
+    } catch (error) {
+      // Folder already gone.
+    }
+    db.getSheetByName(SHEETS.invoices).deleteRow(invoice._row);
+    clearMemo_();
+    audit_(db, id, user.email, 'Invoice deleted', {
+      vendor: invoice.Vendor, invoiceNo: invoice.InvoiceNo, status: invoice.Status, finalFileId: invoice.FinalFileId,
+    });
+  });
   return { ok: true };
 }
 
@@ -464,17 +624,13 @@ function decideInvoice(input) {
     }
   });
 
-  const fresh = () => getInvoices_(db).find(row => row.ID === input.id);
   if (input.action === 'reject') {
-    sendNotice_(invoice.SubmitterEmail, 'Invoice needs revision', `Invoice ${invoice.InvoiceNo} was returned: ${note}`);
-  } else if (nextApprover) {
-    // The next approver is only notified once the package shows the first signature.
-    preparePackage_(db, fresh(), user.email, nextApprover,
-      `Invoice ${invoice.InvoiceNo} from ${invoice.Vendor} (${formatAmount_(invoice.Amount)}) is ready for your review.`);
-  } else if (completed) {
-    finalizeInvoice_(db, fresh(), user.email);
+    sendNotice_(invoice.SubmitterEmail, 'Invoice needs revision', `Invoice ${invoice.InvoiceNo} was returned: ${note}`, invoice.ID);
+  } else if (nextApprover || completed) {
+    // The next approver is notified once the package shows the first signature; filing runs in the background.
+    kickQueue_();
   }
-  return { ok: true };
+  return { ok: true, queued: Boolean(nextApprover || completed) };
 }
 
 function retryFinalization(id) {
@@ -490,8 +646,8 @@ function retryFinalization(id) {
     updateInvoice_(db.getSheetByName(SHEETS.invoices), invoice, { Status: 'Processing final PDF' });
     audit_(db, invoice.ID, user.email, 'Retried finalization', {});
   });
-  finalizeInvoice_(db, getInvoices_(db).find(row => row.ID === id), user.email);
-  return { ok: true };
+  kickQueue_();
+  return { ok: true, queued: true };
 }
 
 // Builds the review package (topsheet with payment details + invoice) and optionally notifies an approver.
@@ -507,10 +663,10 @@ function preparePackage_(db, invoice, actor, notifyEmail, notice) {
     updateInvoice_(db.getSheetByName(SHEETS.invoices), invoice, { PackageStatus: 'Failed' });
     audit_(db, invoice.ID, actor, 'Package build failed', { message: lastPackageError_ });
     sendNotice_(invoice.SubmitterEmail, 'Invoice package could not be built',
-      `The review package for invoice ${invoice.InvoiceNo} could not be built. Open the app and choose "Rebuild package".`);
+      `The review package for invoice ${invoice.InvoiceNo} could not be built. Open the app and choose "Rebuild package".`, invoice.ID);
     return false;
   }
-  if (notifyEmail) sendNotice_(notifyEmail, 'Invoice approval requested', notice);
+  if (notifyEmail) sendNotice_(notifyEmail, 'Invoice approval requested', notice, invoice.ID);
   return true;
 }
 
@@ -532,7 +688,7 @@ function buildPackage_(db, invoice) {
       // Invoices signed before saved signatures stored a typed name instead of a Drive file reference.
       if (stored.startsWith('file:')) {
         try {
-          entry.signature = Utilities.base64Encode(DriveApp.getFileById(stored.slice(5)).getBlob().getBytes());
+          entry.signature = signatureBase64_(stored.slice(5));
         } catch (error) {
           entry.signatureText = entry.name;
         }
@@ -545,17 +701,23 @@ function buildPackage_(db, invoice) {
     return entry;
   });
   const original = DriveApp.getFileById(invoice.OriginalFileId).getBlob();
-  const response = UrlFetchApp.fetch(config.pdfServiceUrl.replace(/\/merge\/?$/, '/package'), {
+  const topsheetData = {
+    vendor: invoice.Vendor, po: invoice.PO, invoiceNo: invoice.InvoiceNo,
+    invoiceDate: String(plain_(invoice.InvoiceDate)), amount: formatAmount_(invoice.Amount),
+    notes: invoice.Notes, submitter: invoice.SubmitterEmail, approvals,
+  };
+  // The Docs template is used whenever TEMPLATE_DOC_ID is set; otherwise the service draws a plain topsheet.
+  const templated = config.templateDocId ? renderTemplateTopsheet_(config.templateDocId, topsheetData, invoice) : null;
+  const response = UrlFetchApp.fetch(config.pdfServiceUrl.replace(/\/merge\/?$/, templated ? '/merge' : '/package'), {
     method: 'post',
     contentType: 'application/json',
     headers: { 'X-Service-Token': config.pdfServiceToken },
-    payload: JSON.stringify({
+    payload: JSON.stringify(templated ? {
+      topsheet: Utilities.base64Encode(templated.getBytes()),
       invoice: Utilities.base64Encode(original.getBytes()),
-      topsheet: {
-        vendor: invoice.Vendor, po: invoice.PO, invoiceNo: invoice.InvoiceNo,
-        invoiceDate: invoice.InvoiceDate, amount: formatAmount_(invoice.Amount),
-        notes: invoice.Notes, submitter: invoice.SubmitterEmail, approvals,
-      },
+    } : {
+      invoice: Utilities.base64Encode(original.getBytes()),
+      topsheet: topsheetData,
     }),
     muteHttpExceptions: true,
   });
@@ -565,6 +727,54 @@ function buildPackage_(db, invoice) {
   const result = JSON.parse(response.getContentText());
   if (!result.pdf) throw new Error('PDF service returned no PDF.');
   return Utilities.newBlob(Utilities.base64Decode(result.pdf), MimeType.PDF, 'package.pdf');
+}
+
+// Copies the Docs template, fills {{PLACEHOLDERS}} (signatures as images), and returns it as a PDF blob.
+function renderTemplateTopsheet_(templateId, data, invoice) {
+  const config = getConfig_();
+  const copy = DriveApp.getFileById(templateId).makeCopy(`Topsheet ${invoice.ID}`, DriveApp.getFolderById(config.workingFolderId));
+  try {
+    const doc = DocumentApp.openById(copy.getId());
+    const body = doc.getBody();
+    const values = {
+      VENDOR: data.vendor, PO: data.po, INVOICE_NO: data.invoiceNo, INVOICE_DATE: data.invoiceDate,
+      AMOUNT: data.amount, NOTES: data.notes, SUBMITTER: data.submitter,
+    };
+    for (let order = 1; order <= 2; order++) {
+      const entry = data.approvals.find(item => item.order === order) || {};
+      values[`APPROVER${order}_NAME`] = entry.name || '';
+      values[`APPROVER${order}_TITLE`] = entry.title || '';
+      values[`APPROVER${order}_DATE`] = entry.date || '';
+      values[`APPROVER${order}_NOTES`] = entry.note || '';
+      // Drawn signatures are inserted as images below, so keep their placeholder.
+      if (!entry.signature) values[`APPROVER${order}_SIG`] = entry.signatureText || '';
+    }
+    Object.keys(values).forEach(key => {
+      const token = `\\{\\{${key}\\}\\}`;
+      const text = String(values[key] || '');
+      // Literal insertion: replaceText treats "$" and "\\" in the replacement specially.
+      let found;
+      while ((found = body.findText(token))) {
+        const element = found.getElement().asText();
+        element.deleteText(found.getStartOffset(), found.getEndOffsetInclusive());
+        if (text) element.insertText(found.getStartOffset(), text);
+      }
+    });
+    data.approvals.filter(entry => entry.signature).forEach(entry => {
+      const found = body.findText(`\\{\\{APPROVER${entry.order}_SIG\\}\\}`);
+      if (!found) return;
+      const text = found.getElement().asText();
+      text.deleteText(found.getStartOffset(), found.getEndOffsetInclusive());
+      const image = text.getParent().asParagraph().appendInlineImage(
+        Utilities.newBlob(Utilities.base64Decode(entry.signature), 'image/png', 'signature.png'));
+      const scale = Math.min(180 / image.getWidth(), 50 / image.getHeight(), 1);
+      image.setWidth(Math.round(image.getWidth() * scale)).setHeight(Math.round(image.getHeight() * scale));
+    });
+    doc.saveAndClose();
+    return DriveApp.getFileById(copy.getId()).getAs(MimeType.PDF);
+  } finally {
+    trashFile_(copy.getId());
+  }
 }
 
 function savePackage_(invoice, blob) {
@@ -591,7 +801,7 @@ function finalizeInvoice_(db, invoice, actor) {
     const filename = [
       safeName_(invoice.Vendor), safeName_(invoice.InvoiceNo),
       formatAmount_(invoice.Amount), safeName_(invoice.PO),
-      Utilities.formatDate(new Date(`${invoice.InvoiceDate}T00:00:00`), Session.getScriptTimeZone(), 'MM-dd-yy'),
+      Utilities.formatDate(new Date(`${plain_(invoice.InvoiceDate)}T00:00:00`), Session.getScriptTimeZone(), 'MM-dd-yy'),
     ].join(', ') + '.pdf';
     const finalFile = vendorFolder.createFile(merged.setName(filename));
     if (settings.AP_EMAIL) {
@@ -608,7 +818,7 @@ function finalizeInvoice_(db, invoice, actor) {
     });
     if (workingPackageId) trashFile_(workingPackageId);
     audit_(db, invoice.ID, actor, 'Filed and sent to AP', { finalFileId: finalFile.getId() });
-    sendNotice_(invoice.SubmitterEmail, 'Invoice approved and filed', `Invoice ${invoice.InvoiceNo} has been approved and filed.`);
+    sendNotice_(invoice.SubmitterEmail, 'Invoice approved and filed', `Invoice ${invoice.InvoiceNo} has been approved and filed.`, invoice.ID);
   } catch (error) {
     updateInvoice_(db.getSheetByName(SHEETS.invoices), invoice, { Status: 'Finalization failed' });
     audit_(db, invoice.ID, actor, 'Finalization failed', { message: String(error.message || error) });
@@ -649,8 +859,18 @@ function getMySignature() {
   const user = requireUser_();
   const approver = findApprover_(getDb_(), user.email);
   if (!approver || !approver.SignatureFileId) return '';
-  const bytes = DriveApp.getFileById(String(approver.SignatureFileId)).getBlob().getBytes();
-  return `data:image/png;base64,${Utilities.base64Encode(bytes)}`;
+  return `data:image/png;base64,${signatureBase64_(String(approver.SignatureFileId))}`;
+}
+
+// Signature files are immutable (a new save creates a new file ID), so caching by ID is safe.
+function signatureBase64_(fileId) {
+  const cache = CacheService.getScriptCache();
+  const key = `sig_${fileId}`;
+  const hit = cache.get(key);
+  if (hit) return hit;
+  const encoded = Utilities.base64Encode(DriveApp.getFileById(fileId).getBlob().getBytes());
+  if (encoded.length < 90000) cache.put(key, encoded, 21600);
+  return encoded;
 }
 
 function saveSignature(dataUrl) {
@@ -684,6 +904,11 @@ function requireAdmin_() {
   return { user, db };
 }
 
+// Informational only; never let a quota lookup break the admin screen.
+function mailQuota_() {
+  try { return MailApp.getRemainingDailyQuota(); } catch (error) { return 'unknown'; }
+}
+
 function getAdminData() {
   const { db } = requireAdmin_();
   const settings = getSettings_(db);
@@ -698,7 +923,7 @@ function getAdminData() {
       active: String(row.Active).toLowerCase() === 'true',
     })),
     remindersScheduled: ScriptApp.getProjectTriggers().some(trigger => trigger.getHandlerFunction() === 'sendReminders'),
-    mailQuotaRemaining: MailApp.getRemainingDailyQuota(),
+    mailQuotaRemaining: mailQuota_(),
   };
 }
 
@@ -731,6 +956,23 @@ function saveApprover(input) {
       appendObject_(db.getSheetByName(SHEETS.approvers), values);
     }
     audit_(db, '', user.email, 'Approver saved', { email, active: values.Active });
+  });
+  return { ok: true };
+}
+
+function deleteApprover(email) {
+  const { user, db } = requireAdmin_();
+  const target = String(email || '').trim().toLowerCase();
+  withLock_(() => {
+    const approver = findApprover_(db, target);
+    if (!approver) throw new Error('Approver not found.');
+    const open = getApprovals_(db).some(row => String(row.ApproverEmail).toLowerCase() === target &&
+      ['Pending', 'Queued'].includes(row.Decision));
+    if (open) throw new Error('This approver has invoices awaiting approval. Make them inactive instead, or wait until those are decided.');
+    if (approver.SignatureFileId) trashFile_(String(approver.SignatureFileId));
+    db.getSheetByName(SHEETS.approvers).deleteRow(approver._row);
+    clearMemo_();
+    audit_(db, '', user.email, 'Approver deleted', { email: target });
   });
   return { ok: true };
 }
@@ -794,9 +1036,9 @@ function sendReminders() {
   due.forEach(({ approval, invoice, action }) => {
     const summary = `Invoice ${invoice.InvoiceNo} from ${invoice.Vendor} (${formatAmount_(invoice.Amount)})`;
     if (action === 'escalate') {
-      sendNotice_(settings.ESCALATION_EMAIL, 'Invoice approval overdue', `${summary} has been waiting on ${approval.ApproverEmail}.`);
+      sendNotice_(settings.ESCALATION_EMAIL, 'Invoice approval overdue', `${summary} has been waiting on ${approval.ApproverEmail}.`, invoice.ID);
     } else {
-      sendNotice_(approval.ApproverEmail, 'Reminder: invoice awaiting your approval', `${summary} is still awaiting your approval.`);
+      sendNotice_(approval.ApproverEmail, 'Reminder: invoice awaiting your approval', `${summary} is still awaiting your approval.`, invoice.ID);
     }
   });
   if (due.length) {
@@ -860,7 +1102,8 @@ function getConfig_() {
     pdfServiceUrl: props.getProperty('PDF_SERVICE_URL'),
     pdfServiceToken: props.getProperty('PDF_SERVICE_TOKEN'),
   };
-  const missing = Object.keys(config).filter(key => !config[key]);
+  config.templateDocId = props.getProperty('TEMPLATE_DOC_ID') || '';
+  const missing = Object.keys(config).filter(key => key !== 'templateDocId' && !config[key]);
   if (missing.length) throw new Error(`Configure required Script Properties: ${missing.join(', ')}.`);
   return config;
 }
@@ -868,8 +1111,10 @@ function getConfig_() {
 function getDb_() {
   const id = PropertiesService.getScriptProperties().getProperty('SPREADSHEET_ID');
   if (!id) throw new Error('Set SPREADSHEET_ID in Script Properties.');
-  return SpreadsheetApp.openById(id);
+  if (!dbHandle_ || dbHandle_.id !== id) dbHandle_ = { id, db: SpreadsheetApp.openById(id) };
+  return dbHandle_.db;
 }
+let dbHandle_ = null;
 
 function withLock_(fn) {
   const lock = LockService.getScriptLock();
@@ -942,15 +1187,135 @@ function audit_(db, id, actor, action, details) {
   });
 }
 
-function sendNotice_(email, subject, body) {
+function sendNotice_(email, subject, body, invoiceId) {
   if (!email) return;
   try {
-    const appUrl = ScriptApp.getService().getUrl();
-    const message = appUrl ? `${body}\n\nOpen the invoice approval app: ${appUrl}` : body;
+    const base = ScriptApp.getService().getUrl();
+    const appUrl = base && invoiceId ? `${base}?invoice=${encodeURIComponent(invoiceId)}` : base;
+    const message = appUrl ? `${body}\n\nOpen this invoice: ${appUrl}` : body;
     MailApp.sendEmail(email, subject, message);
   } catch (error) {
-    // A failed notice (for example, mail quota) must not undo a completed workflow step.
+    // A failed notice must not undo a completed workflow step, but record it so admins can see why.
+    try {
+      audit_(getDb_(), '', 'system', 'Email failed', { to: email, subject, message: String(error.message || error) });
+    } catch (ignored) {
+      // Nothing more can be done.
+    }
   }
+}
+
+// Run once from the Apps Script editor to grant every permission the app needs (mail, Drive, Sheets, external requests).
+function authorizeApp() {
+  MailApp.getRemainingDailyQuota();
+  DriveApp.getRootFolder();
+  getDb_().getName();
+  UrlFetchApp.fetch('https://www.google.com', { muteHttpExceptions: true });
+  ScriptApp.getProjectTriggers();
+  return 'Authorized';
+}
+
+function iso_(value) {
+  return value instanceof Date ? value.toISOString() : String(value || '');
+}
+
+function toMs_(value) {
+  const ms = value instanceof Date ? value.getTime() : Date.parse(value);
+  return Number.isNaN(ms) ? 0 : ms;
+}
+
+function statusGroup_(status) {
+  const value = String(status || '');
+  if (value.startsWith('Pending')) return 'pending';
+  if (value === 'Needs Revision') return 'revision';
+  if (value === 'Filed') return 'filed';
+  if (value === 'Withdrawn') return 'withdrawn';
+  return 'processing';
+}
+
+// Spreadsheet formula injection guard for exported cells.
+function csvCell_(value) {
+  let text = String(value === undefined || value === null ? '' : value);
+  if (/^[=+\-@\t\r]/.test(text)) text = `'${text}`;
+  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+// --- Background work queue ---
+// Slow steps (package build, filing) run from a one-off trigger so the user is not kept waiting.
+// The work itself is found from sheet state: PackageStatus 'Building' or Status 'Processing final PDF'.
+const STALE_JOB_MS = 10 * 60 * 1000;
+
+function kickQueue_() {
+  try {
+    ScriptApp.newTrigger('processQueue').timeBased().after(1000).create();
+  } catch (error) {
+    runQueue_();
+  }
+}
+
+function queueTriggerExists_() {
+  return ScriptApp.getProjectTriggers().some(trigger => trigger.getHandlerFunction() === 'processQueue');
+}
+
+function processQueue(event) {
+  if (!event || !event.triggerUid) requireAdmin_();
+  runQueue_();
+}
+
+function claimJob_(db) {
+  let job = null;
+  withLock_(() => {
+    const now = Date.now();
+    const sheet = db.getSheetByName(SHEETS.invoices);
+    for (const invoice of getInvoices_(db)) {
+      const stale = now - toMs_(invoice.UpdatedAt) > STALE_JOB_MS;
+      if (String(invoice.Status).startsWith('Pending') &&
+          (invoice.PackageStatus === 'Building' || (invoice.PackageStatus === 'Working' && stale))) {
+        updateInvoice_(sheet, invoice, { PackageStatus: 'Working' });
+        job = { type: 'package', invoice };
+        return;
+      }
+      if (invoice.Status === 'Processing final PDF' || (invoice.Status === 'Filing final PDF' && stale)) {
+        updateInvoice_(sheet, invoice, { Status: 'Filing final PDF' });
+        job = { type: 'final', invoice };
+        return;
+      }
+    }
+  });
+  return job;
+}
+
+function runQueue_() {
+  // Remove fired one-off triggers before scanning, so work queued afterwards gets a fresh trigger.
+  ScriptApp.getProjectTriggers()
+    .filter(trigger => trigger.getHandlerFunction() === 'processQueue')
+    .forEach(trigger => ScriptApp.deleteTrigger(trigger));
+  const db = getDb_();
+  const startedAt = Date.now();
+  let job;
+  while ((job = claimJob_(db))) {
+    const invoice = job.invoice;
+    if (job.type === 'package') {
+      const pending = getApprovals_(db).find(row => row.InvoiceID === invoice.ID &&
+        Number(row.Version) === Number(invoice.Version) && row.Decision === 'Pending');
+      preparePackage_(db, invoice, 'system', pending ? pending.ApproverEmail : '',
+        `Invoice ${invoice.InvoiceNo} from ${invoice.Vendor} (${formatAmount_(invoice.Amount)}) is ready for your review.`);
+    } else {
+      try {
+        finalizeInvoice_(db, invoice, 'system');
+      } catch (error) {
+        // Already recorded as 'Finalization failed' with an audit entry; keep working through the queue.
+      }
+    }
+    if (Date.now() - startedAt > 4 * 60 * 1000) {
+      kickQueue_();
+      break;
+    }
+  }
+}
+
+// Sheets turns ISO date strings into Date objects, which google.script.run cannot return.
+function plain_(value) {
+  return value instanceof Date ? Utilities.formatDate(value, 'UTC', 'yyyy-MM-dd') : value;
 }
 
 function getOrCreateFolder_(parent, name) {

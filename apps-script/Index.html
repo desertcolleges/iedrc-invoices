@@ -28,10 +28,32 @@
       td, th { padding: .3rem; text-align: left; }
       td input, td select { width: 100%; box-sizing: border-box; }
       details > summary { cursor: pointer; font-weight: bold; font-size: 1.1rem; }
+      nav { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: 1rem; }
+      nav button { background: #e5e7eb; color: #1f2937; }
+      nav button[aria-selected=true] { background: #155e8a; color: white; }
+      .inactive { display: none; }
+      .chip { background: #e5e7eb; color: #1f2937; border-radius: 999px; padding: .3rem .8rem; font-size: .85rem; }
+      .chip[aria-pressed=true] { background: #155e8a; color: #fff; }
+      .rejection { background: #fef2f2; border-left: 4px solid #a12b2b; padding: .5rem .7rem; margin: .5rem 0; font-size: .9rem; white-space: pre-wrap; }
+      .invoice.highlight { outline: 3px solid #155e8a; }
+      .history { font-size: .85rem; margin: .5rem 0 0; padding-left: 1.1rem; }
+      #viewer:not([hidden]) { display: flex; }
+      #busy { position: fixed; inset: 0 0 auto 0; z-index: 10; background: #155e8a; color: #fff; padding: .6rem 1rem; text-align: center; box-shadow: 0 2px 6px #0004; }
+      #busy::before { content: ''; display: inline-block; width: .9em; height: .9em; margin-right: .6em; vertical-align: -.1em; border: 2px solid #fff6; border-top-color: #fff; border-radius: 50%; animation: spin .8s linear infinite; }
+      @keyframes spin { to { transform: rotate(360deg); } }
       @media (max-width: 600px) { form { grid-template-columns: 1fr; } label.full { grid-column: auto; } }
     </style>
   </head>
   <body>
+    <div id="viewer" hidden style="position:fixed;inset:0;z-index:20;background:#0009;flex-direction:column">
+      <div style="background:#12395b;color:#fff;padding:.6rem 1rem;display:flex;gap:.6rem;align-items:center">
+        <strong id="viewerTitle" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></strong>
+        <button type="button" class="secondary" id="viewerDownload">Download</button>
+        <button type="button" class="secondary" onclick="closeViewer()">Close</button>
+      </div>
+      <div id="viewerPages" style="flex:1;overflow:auto;padding:1rem;max-width:900px;width:100%;box-sizing:border-box;margin:0 auto"></div>
+    </div>
+    <div id="busy" role="status" hidden>Working…</div>
     <header><strong>IEDRC Invoice Approval</strong><span id="identity" style="float:right"></span></header>
     <main id="app">
       <p id="appError" class="error" role="alert"></p>
@@ -44,11 +66,13 @@
       <section id="notReady" hidden>
         <p>The app is not initialized yet. Ask an administrator to complete setup.</p>
       </section>
-      <section>
+      <nav id="tabs" role="tablist"></nav>
+      <section data-tab="submit" data-label="Submit invoice">
         <h2>Submit an invoice</h2>
         <form id="submission">
-          <label>Vendor<input name="vendor" required maxlength="200"></label>
-          <label>PO number<input name="po" required maxlength="100"></label>
+          <label>Vendor<input name="vendor" required maxlength="200" list="vendorList" autocomplete="off"></label>
+          <datalist id="vendorList"></datalist><datalist id="poList"></datalist>
+          <label>PO number<input name="po" required maxlength="100" list="poList" autocomplete="off"></label>
           <label>Invoice number<input name="invoiceNo" required maxlength="100"></label>
           <label>Invoice date<input name="invoiceDate" type="date" required></label>
           <label>Amount<input name="amount" type="number" min="0" step="0.01" required></label>
@@ -60,7 +84,7 @@
         </form>
         <p id="formMessage" class="error" role="status"></p>
       </section>
-      <section id="signatureSection" hidden>
+      <section id="signatureSection" data-tab="signature" data-label="My signature" hidden>
         <h2>My signature</h2>
         <p class="muted">Draw your signature once. It is applied to the topsheet each time you approve; you do not need to sign again.</p>
         <div id="currentSignature"></div>
@@ -71,7 +95,7 @@
         </div>
         <p id="signatureMessage" class="error" role="status"></p>
       </section>
-      <section id="adminSection" hidden>
+      <section id="adminSection" data-tab="admin" data-label="Admin" hidden>
         <details>
           <summary>Admin settings</summary>
           <form id="settingsForm">
@@ -92,7 +116,7 @@
             <label>Email<input name="email" type="email" required></label>
             <label>Title<input name="title"></label>
             <label>Active<select name="active"><option value="true">Active</option><option value="false">Inactive</option></select></label>
-            <div class="full"><button type="submit">Add or update approver</button></div>
+            <div class="full"><button type="submit" id="approverSubmit">Add approver</button> <button type="button" class="secondary" id="approverCancel" hidden onclick="resetApproverForm()">Cancel</button></div>
           </form>
           <h3>Routing rules</h3>
           <p class="muted">The highest matching "minimum amount" pre-selects approvers for submitters. Leave empty for no routing.</p>
@@ -101,20 +125,48 @@
           <p id="adminMessage" class="error" role="status"></p>
         </details>
       </section>
-      <section>
+      <section data-tab="mine" data-label="My invoices &amp; approvals">
         <h2>My invoices and approvals</h2>
-        <input id="invoiceSearch" type="search" placeholder="Search vendor, PO, invoice #, status" aria-label="Search invoices" style="width:100%;box-sizing:border-box;margin-bottom:.8rem">
+        <div id="invoiceFilters" class="actions" style="flex-wrap:wrap;margin:0 0 .8rem"></div>
         <div id="invoices" class="muted">Loading…</div>
+      </section>
+      <section data-tab="view" data-label="View invoices">
+        <h2>View invoices</h2>
+        <p class="muted">Search all submitted invoices by vendor, PO, invoice number, status or submitter.</p>
+        <form id="searchForm">
+          <label class="full">Search<input id="searchQuery" type="search" placeholder="Vendor, PO, invoice number…"></label>
+          <label>Status<select id="searchStatus"><option value="">Any</option><option value="pending">Awaiting approval</option><option value="revision">Needs revision</option><option value="processing">Processing</option><option value="filed">Filed</option><option value="withdrawn">Withdrawn</option></select></label>
+          <label>Invoice date from<input id="searchFrom" type="date"></label>
+          <label>Invoice date to<input id="searchTo" type="date"></label>
+          <div class="full actions"><button type="submit">Search</button><button type="button" class="secondary" id="exportCsv">Export CSV</button></div>
+        </form>
+        <p id="searchSummary" class="muted"></p>
+        <div id="searchResults" class="muted"></div>
       </section>
     </main>
     <script>
       const $ = selector => document.querySelector(selector);
       let revisionId = '';
       let setup = null;
+      let activeTab = 'submit';
+      let vendors = [];
       const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char =>
         ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
       const money = value => '$' + Number(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-      const run = (name, ...args) => new Promise((resolve, reject) => {
+      let pending = 0;
+      const setBusy = (delta, text) => {
+        pending += delta;
+        $('#busy').hidden = pending <= 0;
+        if (text) $('#busy').textContent = text;
+      };
+      const run = (name, ...args) => call(name, args, false);
+      const runQuiet = (name, ...args) => call(name, args, true);
+      const call = (name, args, quiet) => new Promise((resolve, reject) => {
+        if (!quiet) setBusy(1, name === 'submitInvoice' || name === 'resubmitInvoice' ? 'Submitting invoice…'
+          : name === 'rebuildPackage' ? 'Rebuilding package…' : name === 'decideInvoice' ? 'Recording your decision…' : 'Working…');
+        const done = fn => value => { if (!quiet) setBusy(-1); fn(value); };
+        resolve = done(resolve);
+        reject = done(reject);
         const runner = google.script.run.withSuccessHandler(resolve).withFailureHandler(reject);
         if (typeof runner[name] !== 'function') {
           return reject(new Error(`The server does not provide "${name}". Redeploy Code.gs and Index.html together as a new web app version.`));
@@ -132,9 +184,10 @@
 
       function invoiceCard(invoice) {
         const id = escapeHtml(invoice.id);
-        return `<article class="invoice">
+        return `<article class="invoice" data-invoice-id="${id}">
           <strong>${escapeHtml(invoice.vendor)} — ${escapeHtml(invoice.invoiceNo)}</strong>
-          <div>${escapeHtml(invoice.status)}</div>
+          <div>${escapeHtml(invoice.status)}${invoice.building ? ' <span class="muted">— working on it…</span>' : ''}</div>
+          ${invoice.rejectionNote || invoice.rejectedBy ? `<div class="rejection"><strong>Returned by ${escapeHtml(invoice.rejectedBy)}:</strong> ${escapeHtml(invoice.rejectionNote)}</div>` : ''}
           <div class="details">
             <div><span>Amount</span>${money(invoice.amount)}</div>
             <div><span>PO</span>${escapeHtml(invoice.po)}</div>
@@ -143,47 +196,194 @@
             ${invoice.notes ? `<div><span>Notes</span>${escapeHtml(invoice.notes)}</div>` : ''}
           </div>
           ${invoice.hasPackage ? `<div class="actions"><button class="secondary" onclick="openPackage('${id}', this)">View package</button></div>` : ''}
-          ${invoice.awaitingPackage ? '<p class="muted">The review package is still being prepared. Ask the submitter to rebuild it if this persists.</p>' : ''}
+          ${invoice.awaitingPackage && invoice.building ? '<p class="muted">The review package is being prepared. This page updates automatically.</p>' : ''}
+          ${invoice.awaitingPackage && !invoice.building ? '<p class="error">The review package could not be built. The submitter or an admin can rebuild it.</p>' : ''}
           ${invoice.canRebuild ? `<div class="actions"><button class="secondary" onclick="rebuild('${id}')">Rebuild package</button></div>` : ''}
+          ${invoice.canWithdraw ? `<div class="actions"><button class="secondary" onclick="withdraw('${id}')">Withdraw</button></div>` : ''}
           ${invoice.canRevise ? `<div class="actions"><button class="secondary" onclick="startRevision('${id}')">Revise and resubmit</button></div>` : ''}
           ${invoice.canApprove ? `<div class="actions">
             <input id="note-${id}" aria-label="Approval note" placeholder="Note or rejection reason">
             <button onclick="decide('${id}','approve')">Approve with my signature</button>
             <button class="reject" onclick="decide('${id}','reject')">Reject</button>
           </div>` : ''}
+          ${invoice.canDelete ? `<div class="actions"><button class="reject" onclick="removeInvoice('${id}')">Delete record</button></div>` : ''}
+          <div class="actions"><button class="secondary" onclick="toggleHistory('${id}', this)">History</button></div>
+          <div id="history-${id}"></div>
           ${invoice.canRetry ? `<div class="actions"><button class="secondary" onclick="retry('${id}')">Retry finalization</button></div>` : ''}
         </article>`;
       }
+      function showTab(name) {
+        document.querySelectorAll('section[data-tab]').forEach(section => section.classList.toggle('inactive', section.dataset.tab !== name));
+        document.querySelectorAll('#tabs button').forEach(button => button.setAttribute('aria-selected', String(button.dataset.tab === name)));
+        activeTab = name;
+        if (name === 'view' && !$('#searchResults').dataset.loaded) searchInvoices();
+      }
+      function renderTabs() {
+        const visible = [...document.querySelectorAll('section[data-tab]')].filter(section => !section.hidden);
+        $('#tabs').innerHTML = visible.map(section =>
+          `<button type="button" role="tab" data-tab="${section.dataset.tab}">${section.dataset.label}</button>`).join('');
+        $('#tabs').querySelectorAll('button').forEach(button => button.addEventListener('click', () => showTab(button.dataset.tab)));
+        showTab(visible.some(section => section.dataset.tab === activeTab) ? activeTab : (visible[0] || {}).dataset?.tab);
+      }
+      function searchCard(item) {
+        return `<article class="invoice">
+          <strong>${escapeHtml(item.vendor)} — ${escapeHtml(item.invoiceNo)}</strong>
+          <div>${escapeHtml(item.status)}</div>
+          <div class="details">
+            <div><span>Amount</span>${money(item.amount)}</div>
+            <div><span>PO</span>${escapeHtml(item.po)}</div>
+            <div><span>Invoice date</span>${escapeHtml(item.invoiceDate)}</div>
+            <div><span>Submitted by</span>${escapeHtml(item.submitter)}</div>
+          </div>
+          ${item.canView ? `<div class="actions"><button class="secondary" onclick="openPackage('${escapeHtml(item.id)}', this)">View package</button></div>` : ''}
+        </article>`;
+      }
+      function searchFilters() {
+        return { query: $('#searchQuery').value, status: $('#searchStatus').value, from: $('#searchFrom').value, to: $('#searchTo').value };
+      }
+      function searchInvoices() {
+        const target = $('#searchResults');
+        target.dataset.loaded = '1';
+        target.className = 'muted';
+        target.textContent = 'Searching…';
+        run('searchInvoices', searchFilters()).then(result => {
+          target.className = '';
+          target.innerHTML = result.items.length ? result.items.map(searchCard).join('') : '<p>No matching invoices.</p>';
+          $('#searchSummary').textContent = result.total > result.items.length
+            ? `Showing the newest ${result.items.length} of ${result.total} matches. Narrow the search or export all as CSV.`
+            : `${result.total} matching invoice${result.total === 1 ? '' : 's'}.`;
+        }).catch(error => showError(target, error));
+      }
+      $('#exportCsv').addEventListener('click', () => {
+        run('exportInvoicesCsv', searchFilters()).then(file => {
+          const url = URL.createObjectURL(new Blob([file.csv], { type: 'text/csv' }));
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = file.name;
+          link.click();
+          setTimeout(() => URL.revokeObjectURL(url), 60000);
+        }).catch(error => showError($('#searchResults'), error));
+      });
+      $('#searchForm').addEventListener('submit', event => { event.preventDefault(); searchInvoices(); });
+      let invoiceFilter = null;
+      let pollTimer = null;
+      let pollCount = 0;
+      let deepLinkId = '';
+      const FILTERS = [
+        ['awaiting', 'Awaiting my approval', item => item.awaitingMe],
+        ['revision', 'Needs revision', item => item.group === 'revision'],
+        ['pending', 'In progress', item => item.group === 'pending' || item.group === 'processing'],
+        ['filed', 'Filed', item => item.group === 'filed'],
+        ['withdrawn', 'Withdrawn', item => item.group === 'withdrawn'],
+        ['all', 'All', () => true],
+      ];
       function renderInvoices() {
-        const terms = $('#invoiceSearch').value.toLowerCase().split(/\s+/).filter(Boolean);
-        const data = (window.invoiceData || []).filter(item => {
-          const haystack = [item.vendor, item.po, item.invoiceNo, item.status, item.submitter].join(' ').toLowerCase();
-          return terms.every(term => haystack.includes(term));
-        });
+        const all = window.invoiceData || [];
+        const awaiting = all.filter(item => item.awaitingMe).length;
+        if (invoiceFilter === null) invoiceFilter = awaiting ? 'awaiting' : 'all';
+        $('#invoiceFilters').innerHTML = FILTERS.map(([key, label, test]) => {
+          const count = all.filter(test).length;
+          return `<button type="button" class="chip" data-filter="${key}" aria-pressed="${invoiceFilter === key}">${label} (${count})</button>`;
+        }).join('');
+        $('#invoiceFilters').querySelectorAll('button').forEach(button => button.addEventListener('click', () => {
+          invoiceFilter = button.dataset.filter;
+          renderInvoices();
+        }));
+        const tab = $('#tabs button[data-tab=mine]');
+        if (tab) tab.textContent = awaiting ? `My invoices & approvals (${awaiting})` : 'My invoices & approvals';
+        const test = FILTERS.find(entry => entry[0] === invoiceFilter)[2];
+        const data = all.filter(test);
         $('#invoices').className = '';
         $('#invoices').innerHTML = data.length ? data.map(invoiceCard).join('') : '<p>No invoices to show.</p>';
+        if (deepLinkId) focusInvoice(deepLinkId);
+        clearTimeout(pollTimer);
+        if (all.some(item => item.building) && pollCount < 40) {
+          pollCount += 1;
+          pollTimer = setTimeout(() => runQuiet('getDashboard').then(data => { window.invoiceData = data; renderInvoices(); }).catch(() => {}), 4000);
+        } else if (!all.some(item => item.building)) {
+          pollCount = 0;
+        }
+      }
+      function focusInvoice(id) {
+        const all = window.invoiceData || [];
+        const item = all.find(entry => entry.id === id);
+        if (!item) return;
+        deepLinkId = '';
+        if (!FILTERS.find(entry => entry[0] === invoiceFilter)[2](item)) { invoiceFilter = 'all'; renderInvoices(); }
+        showTab('mine');
+        const card = $('#invoices').querySelector(`[data-invoice-id="${CSS.escape(id)}"]`);
+        if (card) { card.classList.add('highlight'); card.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
       }
       function refresh() {
+        pollCount = 0;
         run('getDashboard').then(data => {
           window.invoiceData = data;
           renderInvoices();
         }).catch(error => showError($('#invoices'), error));
       }
-      $('#invoiceSearch').addEventListener('input', renderInvoices);
+      function withdraw(id) {
+        const invoice = window.invoiceData.find(item => item.id === id);
+        if (!invoice || !confirm(`Withdraw ${invoice.vendor} — ${invoice.invoiceNo}? Approvers will no longer be asked to approve it. You can revise and resubmit it later.`)) return;
+        run('withdrawInvoice', id).then(refresh).catch(reportFailure);
+      }
+      function toggleHistory(id, button) {
+        const box = document.getElementById(`history-${id}`);
+        if (box.innerHTML) { box.innerHTML = ''; return; }
+        button.disabled = true;
+        run('getHistory', id).then(rows => {
+          box.innerHTML = `<ul class="history">${rows.map(row =>
+            `<li><strong>${escapeHtml(row.action)}</strong> — ${escapeHtml(new Date(row.time).toLocaleString())} — ${escapeHtml(row.actor)}${row.detail ? `<br><span class="muted">${escapeHtml(row.detail)}</span>` : ''}</li>`).join('') || '<li>No history.</li>'}</ul>`;
+        }).catch(error => showError(box, error)).then(() => { button.disabled = false; });
+      }
+      const PDFJS_BASE = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/';
+      let pdfjsReady = null;
+      function loadPdfJs() {
+        pdfjsReady = pdfjsReady || new Promise((resolve, reject) => {
+          const script = document.createElement('script');
+          script.src = PDFJS_BASE + 'pdf.min.js';
+          script.onload = () => { pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_BASE + 'pdf.worker.min.js'; resolve(pdfjsLib); };
+          script.onerror = () => { pdfjsReady = null; reject(new Error('Could not load the PDF viewer.')); };
+          document.head.appendChild(script);
+        });
+        return pdfjsReady;
+      }
+      function closeViewer() { $('#viewer').hidden = true; $('#viewerPages').innerHTML = ''; }
+      function downloadBytes(bytes, name) {
+        const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = name;
+        link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 60000);
+      }
       async function openPackage(id, button) {
         button.disabled = true;
         try {
-          const pkg = await run('getPackage', id);
+          const [pkg, pdfjs] = await Promise.all([run('getPackage', id), loadPdfJs().catch(() => null)]);
           const bytes = Uint8Array.from(atob(pkg.data), char => char.charCodeAt(0));
-          const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
-          const link = document.createElement('a');
-          link.href = url;
-          link.target = '_blank';
-          link.download = pkg.name;
-          link.rel = 'noopener';
-          link.click();
-          setTimeout(() => URL.revokeObjectURL(url), 60000);
+          if (!pdfjs) {
+            downloadBytes(bytes, pkg.name);
+          } else {
+            $('#viewerTitle').textContent = pkg.name;
+            $('#viewerDownload').onclick = () => downloadBytes(bytes, pkg.name);
+            const pages = $('#viewerPages');
+            pages.innerHTML = '';
+            $('#viewer').hidden = false;
+            const pdf = await pdfjs.getDocument({ data: bytes.slice() }).promise;
+            const scale = Math.min(2, Math.max(1, (window.devicePixelRatio || 1)));
+            for (let number = 1; number <= pdf.numPages; number++) {
+              const page = await pdf.getPage(number);
+              const viewport = page.getViewport({ scale: 1.4 * scale });
+              const canvas = document.createElement('canvas');
+              canvas.width = viewport.width;
+              canvas.height = viewport.height;
+              canvas.style.cssText = 'width:100%;height:auto;background:#fff;margin-bottom:.6rem;box-shadow:0 1px 3px #0004';
+              pages.appendChild(canvas);
+              await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+            }
+          }
         } catch (error) {
+          closeViewer();
           showError($('#appError'), error);
         }
         button.disabled = false;
@@ -192,6 +392,7 @@
         const invoice = window.invoiceData.find(item => item.id === id);
         if (!invoice) return;
         revisionId = id;
+        showTab('submit');
         const form = $('#submission');
         ['vendor', 'po', 'invoiceNo', 'invoiceDate', 'amount', 'notes', 'approver1', 'approver2'].forEach(key => {
           form.elements[key].value = invoice[key] ?? '';
@@ -214,6 +415,11 @@
       }
       const cancelRevision = resetForm;
       const reportFailure = error => showError($('#invoices'), error);
+      function removeInvoice(id) {
+        const invoice = window.invoiceData.find(item => item.id === id);
+        if (!invoice || !confirm(`Delete the record for ${invoice.vendor} — ${invoice.invoiceNo}? Its approvals and working files are removed. This cannot be undone.`)) return;
+        run('deleteInvoice', id).then(refresh).catch(reportFailure);
+      }
       function retry(id) { run('retryFinalization', id).then(refresh).catch(reportFailure); }
       function rebuild(id) { run('rebuildPackage', id).then(refresh).catch(reportFailure); }
       function decide(id, action) {
@@ -245,8 +451,25 @@
         selects[0].value = defaultApprover;
       }
 
+      function renderVendors() {
+        $('#vendorList').innerHTML = vendors.map(item => `<option value="${escapeHtml(item.name)}"></option>`).join('');
+      }
+      function applyVendor() {
+        if (revisionId) return;
+        const form = $('#submission');
+        const hint = vendors.find(item => item.name.toLowerCase() === form.elements.vendor.value.trim().toLowerCase());
+        $('#poList').innerHTML = hint ? hint.pos.map(po => `<option value="${escapeHtml(po)}"></option>`).join('') : '';
+        if (!hint) return;
+        if (!form.elements.po.value && hint.pos[0]) form.elements.po.value = hint.pos[0];
+        [['approver1', hint.approver1], ['approver2', hint.approver2]].forEach(([field, email]) => {
+          const select = form.elements[field];
+          if ([...select.options].some(option => option.value === email.toLowerCase())) select.value = email.toLowerCase();
+        });
+        applyRouting();
+      }
       function loadApp() {
-        run('getSetupInfo').then(info => {
+        run('getBootstrap').then(boot => {
+          const info = boot.setup;
           setup = info;
           const ready = info.initialized && !info.upgradeNeeded;
           $('#identity').textContent = info.user;
@@ -254,14 +477,19 @@
           $('#notReady').hidden = ready || info.admin;
           $('#submission').closest('section').hidden = !ready;
           $('#invoices').closest('section').hidden = !ready;
+          $('#searchForm').closest('section').hidden = !ready;
           $('#signatureSection').hidden = !(ready && info.isApprover);
           $('#adminSection').hidden = !(ready && info.admin);
+          renderTabs();
           if (!ready) return;
           fillApproverSelects(info.approvers, info.defaultApprover);
           $('#fileHint').textContent = `PDF up to ${info.maxUploadMb} MB.`;
-          refresh();
-          if (info.isApprover) loadSignature();
-          if (info.admin) loadAdmin();
+          vendors = boot.vendors || [];
+          renderVendors();
+          window.invoiceData = boot.dashboard;
+          renderInvoices();
+          if (info.isApprover) applySignature(boot.signature);
+          if (info.admin) applyAdmin(boot.admin);
         }).catch(error => showError($('#appError'), error));
       }
 
@@ -304,29 +532,37 @@
         }).catch(error => showError(message, error));
       });
       function loadSignature() {
-        run('getMySignature').then(url => {
+        run('getMySignature').then(applySignature).catch(error => showError($('#signatureMessage'), error));
+      }
+      function applySignature(url) {
+        {
           $('#currentSignature').innerHTML = url
             ? `<p>Current signature:</p><img alt="Your saved signature" src="${escapeHtml(url)}" style="max-width:300px;border:1px solid #d1d5db;background:#fff">`
             : '<p class="error">No signature saved yet. You must save one before approving.</p>';
-        }).catch(error => showError($('#signatureMessage'), error));
+        }
       }
 
       // Admin
       function loadAdmin() {
-        run('getAdminData').then(data => {
+        run('getAdminData').then(applyAdmin).catch(error => showError($('#adminMessage'), error));
+      }
+      function applyAdmin(data) {
+        {
           const form = $('#settingsForm');
           const select = form.elements.DEFAULT_APPROVER;
           select.innerHTML = '<option value="">None</option>' + data.approvers.filter(item => item.active)
             .map(item => `<option value="${escapeHtml(item.email)}">${escapeHtml(item.name)} (${escapeHtml(item.email)})</option>`).join('');
           Object.keys(data.settings).forEach(key => { if (form.elements[key]) form.elements[key].value = data.settings[key]; });
           $('#adminInfo').textContent = `Daily reminders: ${data.remindersScheduled ? 'enabled' : 'not enabled'}. Email sends remaining today: ${data.mailQuotaRemaining}.`;
-          $('#approverTable').innerHTML = '<tr><th>Name</th><th>Email</th><th>Status</th><th>Signature</th><th></th></tr>' +
+          $('#approverTable').innerHTML = '<tr><th>Name</th><th>Email</th><th>Status</th><th>Signature</th><th>Actions</th></tr>' +
             data.approvers.map(item => `<tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.email)}</td>
               <td>${item.active ? 'Active' : 'Inactive'}</td><td>${item.hasSignature ? 'Saved' : 'None'}</td>
-              <td>${item.hasSignature ? `<button class="secondary" onclick="resetSig('${escapeHtml(item.email)}')">Reset</button>` : ''}</td></tr>`).join('');
+              <td class="actions" style="margin:0"><button class="secondary" type="button" onclick="editApprover('${escapeHtml(item.email)}')">Edit</button>
+                ${item.hasSignature ? `<button class="secondary" type="button" onclick="resetSig('${escapeHtml(item.email)}')">Reset signature</button>` : ''}
+                <button class="reject" type="button" onclick="deleteApprover('${escapeHtml(item.email)}')">Delete</button></td></tr>`).join('');
           window.adminApprovers = data.approvers;
           renderRules(data.routing);
-        }).catch(error => showError($('#adminMessage'), error));
+        }
       }
       function renderRules(rules) {
         const options = '<option value="">—</option>' + window.adminApprovers
@@ -343,6 +579,32 @@
           const [min, a1, a2, active] = row.querySelectorAll('input, select');
           return { min: Number(min.value), approver1: a1.value, approver2: a2.value, active: active.checked };
         });
+      }
+      function editApprover(email) {
+        const item = window.adminApprovers.find(entry => entry.email === email);
+        if (!item) return;
+        const form = $('#approverForm');
+        form.elements.name.value = item.name;
+        form.elements.email.value = item.email;
+        form.elements.email.readOnly = true;
+        form.elements.title.value = item.title || '';
+        form.elements.active.value = String(item.active);
+        $('#approverSubmit').textContent = 'Save changes';
+        $('#approverCancel').hidden = false;
+        form.scrollIntoView({ behavior: 'smooth' });
+      }
+      function resetApproverForm() {
+        const form = $('#approverForm');
+        form.reset();
+        form.elements.email.readOnly = false;
+        $('#approverSubmit').textContent = 'Add approver';
+        $('#approverCancel').hidden = true;
+      }
+      function deleteApprover(email) {
+        if (confirm(`Delete approver ${email}? Their saved signature is removed. This cannot be undone.`)) {
+          run('deleteApprover', email).then(() => { showOk($('#adminMessage'), 'Approver deleted.'); loadAdmin(); refreshSetup(); })
+            .catch(error => showError($('#adminMessage'), error));
+        }
       }
       function resetSig(email) {
         if (confirm(`Reset the saved signature for ${email}? They must draw a new one before approving.`)) {
@@ -365,7 +627,7 @@
         const form = event.currentTarget;
         const input = Object.fromEntries(new FormData(form).entries());
         input.active = input.active === 'true';
-        run('saveApprover', input).then(() => { form.reset(); showOk($('#adminMessage'), 'Approver saved.'); loadAdmin(); refreshSetup(); })
+        run('saveApprover', input).then(() => { resetApproverForm(); showOk($('#adminMessage'), 'Approver saved.'); loadAdmin(); refreshSetup(); })
           .catch(error => showError($('#adminMessage'), error));
       });
       $('#scheduleReminders').addEventListener('click', () => {
@@ -379,7 +641,14 @@
         }).catch(error => showError($('#appError'), error));
       }
 
-      window.addEventListener('load', loadApp);
+      window.addEventListener('load', () => {
+        if (google.script.url && google.script.url.getLocation) {
+          google.script.url.getLocation(location => { deepLinkId = (location.parameter && location.parameter.invoice) || ''; loadApp(); });
+        } else {
+          loadApp();
+        }
+      });
+      document.addEventListener('keydown', event => { if (event.key === 'Escape') closeViewer(); });
       $('#initialize').addEventListener('click', () => {
         const button = $('#initialize');
         button.disabled = true;
@@ -389,6 +658,7 @@
         });
       });
       $('#submission').elements.amount.addEventListener('change', applyRouting);
+      $('#submission').elements.vendor.addEventListener('change', applyVendor);
       $('#submission').addEventListener('submit', async event => {
         event.preventDefault();
         const form = event.currentTarget;
@@ -396,6 +666,7 @@
         const message = $('#formMessage');
         message.textContent = '';
         button.disabled = true;
+        button.textContent = 'Submitting…';
         try {
           const file = form.elements.file.files[0];
           const input = Object.fromEntries(new FormData(form).entries());
@@ -417,14 +688,23 @@
             input.confirmDuplicate = true;
             result = await run(method, input);
           }
+          const known = vendors.find(item => item.name.toLowerCase() === String(input.vendor).trim().toLowerCase());
+          if (known) {
+            known.pos = [input.po, ...known.pos.filter(po => po !== input.po)].slice(0, 8);
+            known.approver1 = input.approver1 || '';
+            known.approver2 = input.approver2 || '';
+          } else {
+            vendors.push({ name: String(input.vendor).trim(), pos: [input.po], approver1: input.approver1 || '', approver2: input.approver2 || '' });
+            renderVendors();
+          }
           resetForm();
-          if (result.packageReady) showOk(message, 'Invoice submitted. The approver has been notified.');
-          else showError(message, new Error('Invoice saved, but the review package could not be built. Use "Rebuild package" below.'));
+          showOk(message, 'Invoice submitted. The review package is being prepared and the approver is emailed when it is ready.');
           refresh();
         } catch (error) {
           showError(message, error);
         }
         button.disabled = false;
+        button.textContent = revisionId ? 'Resubmit invoice' : 'Submit invoice';
       });
       $('#cancelRevision').addEventListener('click', cancelRevision);
     </script>
