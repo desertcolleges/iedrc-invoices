@@ -80,6 +80,11 @@ async function buildTopsheet(data) {
       page.drawLine({ start: { x: left, y: y - 2 }, end: { x: left + 200, y: y - 2 }, thickness: 0.5, color: rgb(0.3, 0.3, 0.3) });
       y -= 16;
       text(`Signed ${approval.date || ''}`, left, 9, font, rgb(0.3, 0.3, 0.3));
+    } else if (approval.signatureText) {
+      text(approval.signatureText, left, 20, bold, rgb(0.1, 0.1, 0.4));
+      page.drawLine({ start: { x: left, y: y - 2 }, end: { x: left + 200, y: y - 2 }, thickness: 0.5, color: rgb(0.3, 0.3, 0.3) });
+      y -= 16;
+      text(`Signed (typed) ${approval.date || ''}`, left, 9, font, rgb(0.3, 0.3, 0.3));
     } else {
       page.drawLine({ start: { x: left, y: y + 6 }, end: { x: left + 200, y: y + 6 }, thickness: 0.5, color: rgb(0.3, 0.3, 0.3) });
       y -= 10;

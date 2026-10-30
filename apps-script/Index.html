@@ -103,6 +103,7 @@
       </section>
       <section>
         <h2>My invoices and approvals</h2>
+        <input id="invoiceSearch" type="search" placeholder="Search vendor, PO, invoice #, status" aria-label="Search invoices" style="width:100%;box-sizing:border-box;margin-bottom:.8rem">
         <div id="invoices" class="muted">Loading…</div>
       </section>
     </main>
@@ -113,8 +114,13 @@
       const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char =>
         ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
       const money = value => '$' + Number(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-      const run = (name, ...args) => new Promise((resolve, reject) =>
-        google.script.run.withSuccessHandler(resolve).withFailureHandler(reject)[name](...args));
+      const run = (name, ...args) => new Promise((resolve, reject) => {
+        const runner = google.script.run.withSuccessHandler(resolve).withFailureHandler(reject);
+        if (typeof runner[name] !== 'function') {
+          return reject(new Error(`The server does not provide "${name}". Redeploy Code.gs and Index.html together as a new web app version.`));
+        }
+        runner[name](...args);
+      });
       function showError(target, error) { target.className = 'error'; target.textContent = error.message || String(error); }
       function showOk(target, text) { target.className = 'ok'; target.textContent = text; }
       const fileToBase64 = file => new Promise((resolve, reject) => {
@@ -148,13 +154,22 @@
           ${invoice.canRetry ? `<div class="actions"><button class="secondary" onclick="retry('${id}')">Retry finalization</button></div>` : ''}
         </article>`;
       }
+      function renderInvoices() {
+        const terms = $('#invoiceSearch').value.toLowerCase().split(/\s+/).filter(Boolean);
+        const data = (window.invoiceData || []).filter(item => {
+          const haystack = [item.vendor, item.po, item.invoiceNo, item.status, item.submitter].join(' ').toLowerCase();
+          return terms.every(term => haystack.includes(term));
+        });
+        $('#invoices').className = '';
+        $('#invoices').innerHTML = data.length ? data.map(invoiceCard).join('') : '<p>No invoices to show.</p>';
+      }
       function refresh() {
         run('getDashboard').then(data => {
-          $('#invoices').className = '';
-          $('#invoices').innerHTML = data.length ? data.map(invoiceCard).join('') : '<p>No invoices to show.</p>';
           window.invoiceData = data;
+          renderInvoices();
         }).catch(error => showError($('#invoices'), error));
       }
+      $('#invoiceSearch').addEventListener('input', renderInvoices);
       async function openPackage(id, button) {
         button.disabled = true;
         try {
