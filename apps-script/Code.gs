@@ -255,6 +255,7 @@ function getDashboard() {
         awaitingPackage: pendingByInvoice.has(row.ID) && !ready,
         canRebuild: pendingStatus && !ready && (admin || row.SubmitterEmail === user.email),
         canRevise: row.Status === 'Needs Revision' && row.SubmitterEmail === user.email,
+        canDelete: admin,
         canRetry: row.Status === 'Finalization failed' && admin,
         hasPackage: Boolean(row.PackageFileId || row.FinalFileId),
         po: row.PO,
@@ -425,6 +426,34 @@ function rebuildPackage(id) {
   const ready = preparePackage_(db, invoice, user.email, pending ? pending.ApproverEmail : '',
     `Invoice ${invoice.InvoiceNo} from ${invoice.Vendor} (${formatAmount_(invoice.Amount)}) is ready for your review.`);
   if (!ready) throw new Error(`The package could not be built: ${lastPackageError_ || 'unknown error'}. See the Audit sheet for details.`);
+  return { ok: true };
+}
+
+// Admin-only cleanup (e.g. test invoices). Filed PDFs already sent to AP are left in the archive folder.
+function deleteInvoice(id) {
+  const { user, db } = requireAdmin_();
+  withLock_(() => {
+    const invoice = getInvoices_(db).find(row => row.ID === id);
+    if (!invoice) throw new Error('Invoice not found.');
+    const approvalSheet = db.getSheetByName(SHEETS.approvals);
+    getApprovals_(db).filter(row => row.InvoiceID === id).map(row => row._row)
+      .sort((a, b) => b - a).forEach(rowNumber => approvalSheet.deleteRow(rowNumber));
+    [invoice.OriginalFileId, invoice.PackageFileId].filter(Boolean).forEach(fileId => trashFile_(String(fileId)));
+    try {
+      const parents = DriveApp.getFileById(invoice.OriginalFileId).getParents();
+      if (parents.hasNext()) {
+        const folder = parents.next();
+        if (folder.getName() === id) folder.setTrashed(true);
+      }
+    } catch (error) {
+      // Folder already gone.
+    }
+    db.getSheetByName(SHEETS.invoices).deleteRow(invoice._row);
+    clearMemo_();
+    audit_(db, id, user.email, 'Invoice deleted', {
+      vendor: invoice.Vendor, invoiceNo: invoice.InvoiceNo, status: invoice.Status, finalFileId: invoice.FinalFileId,
+    });
+  });
   return { ok: true };
 }
 

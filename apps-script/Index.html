@@ -180,6 +180,7 @@
             <button onclick="decide('${id}','approve')">Approve with my signature</button>
             <button class="reject" onclick="decide('${id}','reject')">Reject</button>
           </div>` : ''}
+          ${invoice.canDelete ? `<div class="actions"><button class="reject" onclick="removeInvoice('${id}')">Delete record</button></div>` : ''}
           ${invoice.canRetry ? `<div class="actions"><button class="secondary" onclick="retry('${id}')">Retry finalization</button></div>` : ''}
         </article>`;
       }
@@ -253,6 +254,7 @@
         const invoice = window.invoiceData.find(item => item.id === id);
         if (!invoice) return;
         revisionId = id;
+        showTab('submit');
         const form = $('#submission');
         ['vendor', 'po', 'invoiceNo', 'invoiceDate', 'amount', 'notes', 'approver1', 'approver2'].forEach(key => {
           form.elements[key].value = invoice[key] ?? '';
@@ -275,6 +277,11 @@
       }
       const cancelRevision = resetForm;
       const reportFailure = error => showError($('#invoices'), error);
+      function removeInvoice(id) {
+        const invoice = window.invoiceData.find(item => item.id === id);
+        if (!invoice || !confirm(`Delete the record for ${invoice.vendor} — ${invoice.invoiceNo}? Its approvals and working files are removed. This cannot be undone.`)) return;
+        run('deleteInvoice', id).then(refresh).catch(reportFailure);
+      }
       function retry(id) { run('retryFinalization', id).then(refresh).catch(reportFailure); }
       function rebuild(id) { run('rebuildPackage', id).then(refresh).catch(reportFailure); }
       function decide(id, action) {
