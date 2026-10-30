@@ -20,6 +20,14 @@
       .actions { display: flex; gap: .5rem; margin-top: .7rem; }
       .error { color: #a12b2b; white-space: pre-wrap; }
       .muted { color: #6b7280; }
+      .ok { color: #1f6f43; }
+      .details { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: .3rem .8rem; margin: .5rem 0; font-size: .9rem; }
+      .details span { color: #6b7280; display: block; font-size: .75rem; }
+      canvas { border: 1px solid #9ca3af; border-radius: 4px; background: #fff; touch-action: none; max-width: 100%; }
+      table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+      td, th { padding: .3rem; text-align: left; }
+      td input, td select { width: 100%; box-sizing: border-box; }
+      details > summary { cursor: pointer; font-weight: bold; font-size: 1.1rem; }
       @media (max-width: 600px) { form { grid-template-columns: 1fr; } label.full { grid-column: auto; } }
     </style>
   </head>
@@ -28,9 +36,9 @@
     <main id="app">
       <p id="appError" class="error" role="alert"></p>
       <section id="setup" hidden>
-        <h2>Initialize invoice approval</h2>
-        <p>Set up the app's Sheets tabs before submitting invoices.</p>
-        <button id="initialize">Initialize sheets</button>
+        <h2>Initialize or upgrade invoice approval</h2>
+        <p>Create or upgrade the app's Sheets tabs and columns before using the app. Existing data is kept.</p>
+        <button id="initialize">Initialize / upgrade sheets</button>
         <p id="setupMessage" class="error" role="status"></p>
       </section>
       <section id="notReady" hidden>
@@ -47,10 +55,51 @@
           <label>Approver 1<select name="approver1" required></select></label>
           <label>Approver 2 (optional)<select name="approver2"><option value="">No second approver</option></select></label>
           <label class="full">Notes<textarea name="notes" maxlength="500"></textarea></label>
-          <label class="full">Invoice PDF<input name="file" type="file" accept="application/pdf,.pdf" required></label>
+          <label class="full">Invoice PDF<input name="file" type="file" accept="application/pdf,.pdf" required><span id="fileHint" class="muted"></span></label>
           <div class="full"><button type="submit">Submit invoice</button> <button type="button" class="secondary" id="cancelRevision" hidden>Cancel revision</button></div>
         </form>
         <p id="formMessage" class="error" role="status"></p>
+      </section>
+      <section id="signatureSection" hidden>
+        <h2>My signature</h2>
+        <p class="muted">Draw your signature once. It is applied to the topsheet each time you approve; you do not need to sign again.</p>
+        <div id="currentSignature"></div>
+        <canvas id="sigPad" width="480" height="150" aria-label="Signature pad"></canvas>
+        <div class="actions">
+          <button id="saveSignature">Save signature</button>
+          <button class="secondary" id="clearSignature" type="button">Clear</button>
+        </div>
+        <p id="signatureMessage" class="error" role="status"></p>
+      </section>
+      <section id="adminSection" hidden>
+        <details>
+          <summary>Admin settings</summary>
+          <form id="settingsForm">
+            <label>AP email<input name="AP_EMAIL" type="email" required></label>
+            <label>Default approver 1<select name="DEFAULT_APPROVER"></select></label>
+            <label>Upload limit (MB, 1-10)<input name="MAX_UPLOAD_MB" type="number" min="1" max="10" step="1" required></label>
+            <label>Duplicate invoices<select name="DUPLICATE_MODE"><option value="off">Off</option><option value="warn">Warn</option><option value="block">Block</option></select></label>
+            <label>Reminder every N days (0 = off)<input name="REMINDER_DAYS" type="number" min="0" max="60" required></label>
+            <label>Escalate after N days (0 = off)<input name="ESCALATION_DAYS" type="number" min="0" max="60" required></label>
+            <label class="full">Escalation email<input name="ESCALATION_EMAIL" type="email"></label>
+            <div class="full"><button type="submit">Save settings</button> <button type="button" class="secondary" id="scheduleReminders">Enable daily reminders</button></div>
+          </form>
+          <p id="adminInfo" class="muted"></p>
+          <h3>Approvers</h3>
+          <table id="approverTable"></table>
+          <form id="approverForm">
+            <label>Name<input name="name" required></label>
+            <label>Email<input name="email" type="email" required></label>
+            <label>Title<input name="title"></label>
+            <label>Active<select name="active"><option value="true">Active</option><option value="false">Inactive</option></select></label>
+            <div class="full"><button type="submit">Add or update approver</button></div>
+          </form>
+          <h3>Routing rules</h3>
+          <p class="muted">The highest matching "minimum amount" pre-selects approvers for submitters. Leave empty for no routing.</p>
+          <table id="routingTable"></table>
+          <div class="actions"><button class="secondary" id="addRule" type="button">Add rule</button><button id="saveRules" type="button">Save rules</button></div>
+          <p id="adminMessage" class="error" role="status"></p>
+        </details>
       </section>
       <section>
         <h2>My invoices and approvals</h2>
@@ -60,26 +109,69 @@
     <script>
       const $ = selector => document.querySelector(selector);
       let revisionId = '';
+      let setup = null;
       const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char =>
         ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
-      function showError(target, error) { target.textContent = error.message || String(error); }
+      const money = value => '$' + Number(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      const run = (name, ...args) => new Promise((resolve, reject) =>
+        google.script.run.withSuccessHandler(resolve).withFailureHandler(reject)[name](...args));
+      function showError(target, error) { target.className = 'error'; target.textContent = error.message || String(error); }
+      function showOk(target, text) { target.className = 'ok'; target.textContent = text; }
+      const fileToBase64 = file => new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result.split(',')[1]);
+        reader.onerror = () => reject(new Error('Could not read the selected PDF.'));
+        reader.readAsDataURL(file);
+      });
+
+      function invoiceCard(invoice) {
+        const id = escapeHtml(invoice.id);
+        return `<article class="invoice">
+          <strong>${escapeHtml(invoice.vendor)} — ${escapeHtml(invoice.invoiceNo)}</strong>
+          <div>${escapeHtml(invoice.status)}</div>
+          <div class="details">
+            <div><span>Amount</span>${money(invoice.amount)}</div>
+            <div><span>PO</span>${escapeHtml(invoice.po)}</div>
+            <div><span>Invoice date</span>${escapeHtml(invoice.invoiceDate)}</div>
+            <div><span>Submitted by</span>${escapeHtml(invoice.submitter)}</div>
+            ${invoice.notes ? `<div><span>Notes</span>${escapeHtml(invoice.notes)}</div>` : ''}
+          </div>
+          ${invoice.hasPackage ? `<div class="actions"><button class="secondary" onclick="openPackage('${id}', this)">View package</button></div>` : ''}
+          ${invoice.awaitingPackage ? '<p class="muted">The review package is still being prepared. Ask the submitter to rebuild it if this persists.</p>' : ''}
+          ${invoice.canRebuild ? `<div class="actions"><button class="secondary" onclick="rebuild('${id}')">Rebuild package</button></div>` : ''}
+          ${invoice.canRevise ? `<div class="actions"><button class="secondary" onclick="startRevision('${id}')">Revise and resubmit</button></div>` : ''}
+          ${invoice.canApprove ? `<div class="actions">
+            <input id="note-${id}" aria-label="Approval note" placeholder="Note or rejection reason">
+            <button onclick="decide('${id}','approve')">Approve with my signature</button>
+            <button class="reject" onclick="decide('${id}','reject')">Reject</button>
+          </div>` : ''}
+          ${invoice.canRetry ? `<div class="actions"><button class="secondary" onclick="retry('${id}')">Retry finalization</button></div>` : ''}
+        </article>`;
+      }
       function refresh() {
-        google.script.run.withSuccessHandler(data => {
-          $('#invoices').innerHTML = data.length ? data.map(invoice => `
-            <article class="invoice">
-              <strong>${escapeHtml(invoice.vendor)} — ${escapeHtml(invoice.invoiceNo)}</strong>
-              <div>${escapeHtml(invoice.status)} · $${Number(invoice.amount).toFixed(2)} · ${escapeHtml(invoice.submitter)}</div>
-              ${invoice.canRevise ? `<div class="actions"><button class="secondary" onclick="startRevision('${escapeHtml(invoice.id)}')">Revise and resubmit</button></div>` : ''}
-              ${invoice.canApprove ? `<div class="actions">
-                <input id="sig-${escapeHtml(invoice.id)}" aria-label="Electronic signature" placeholder="Type your full name">
-                <input id="note-${escapeHtml(invoice.id)}" aria-label="Approval note" placeholder="Note or rejection reason">
-                <button onclick="decide('${escapeHtml(invoice.id)}','approve')">Approve & sign</button>
-                <button class="reject" onclick="decide('${escapeHtml(invoice.id)}','reject')">Reject</button>
-              </div>` : ''}
-              ${invoice.canRetry ? `<div class="actions"><button class="secondary" onclick="retry('${escapeHtml(invoice.id)}')">Retry finalization</button></div>` : ''}
-            </article>`).join('') : '<p>No invoices to show.</p>';
+        run('getDashboard').then(data => {
+          $('#invoices').className = '';
+          $('#invoices').innerHTML = data.length ? data.map(invoiceCard).join('') : '<p>No invoices to show.</p>';
           window.invoiceData = data;
-        }).withFailureHandler(error => showError($('#invoices'), error)).getDashboard();
+        }).catch(error => showError($('#invoices'), error));
+      }
+      async function openPackage(id, button) {
+        button.disabled = true;
+        try {
+          const pkg = await run('getPackage', id);
+          const bytes = Uint8Array.from(atob(pkg.data), char => char.charCodeAt(0));
+          const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
+          const link = document.createElement('a');
+          link.href = url;
+          link.target = '_blank';
+          link.download = pkg.name;
+          link.rel = 'noopener';
+          link.click();
+          setTimeout(() => URL.revokeObjectURL(url), 60000);
+        } catch (error) {
+          showError($('#appError'), error);
+        }
+        button.disabled = false;
       }
       function startRevision(id) {
         const invoice = window.invoiceData.find(item => item.id === id);
@@ -89,59 +181,199 @@
         ['vendor', 'po', 'invoiceNo', 'invoiceDate', 'amount', 'notes', 'approver1', 'approver2'].forEach(key => {
           form.elements[key].value = invoice[key] ?? '';
         });
-        form.elements.file.required = true;
+        form.elements.file.required = false;
+        $('#fileHint').textContent = 'Optional: attach a new PDF only if the invoice itself changed. The old file is deleted when replaced.';
         form.querySelector('button[type=submit]').textContent = 'Resubmit invoice';
         $('#cancelRevision').hidden = false;
         window.scrollTo({ top: 0, behavior: 'smooth' });
       }
-      function cancelRevision() {
+      function resetForm() {
         revisionId = '';
-        $('#submission').reset();
-        $('#submission').querySelector('button[type=submit]').textContent = 'Submit invoice';
+        const form = $('#submission');
+        form.reset();
+        form.elements.file.required = true;
+        $('#fileHint').textContent = '';
+        form.querySelector('button[type=submit]').textContent = 'Submit invoice';
         $('#cancelRevision').hidden = true;
+        if (setup) form.elements.approver1.value = setup.defaultApprover;
       }
-      function retry(id) {
-        google.script.run.withSuccessHandler(refresh)
-          .withFailureHandler(error => showError($('#invoices'), error)).retryFinalization(id);
-      }
+      const cancelRevision = resetForm;
+      const reportFailure = error => showError($('#invoices'), error);
+      function retry(id) { run('retryFinalization', id).then(refresh).catch(reportFailure); }
+      function rebuild(id) { run('rebuildPackage', id).then(refresh).catch(reportFailure); }
       function decide(id, action) {
-        const signature = $(`#sig-${CSS.escape(id)}`)?.value || '';
         const note = $(`#note-${CSS.escape(id)}`)?.value || '';
-        google.script.run.withSuccessHandler(refresh)
-          .withFailureHandler(error => showError($('#invoices'), error))
-          .decideInvoice({ id, action, signature, note });
+        document.querySelectorAll('.invoice button').forEach(button => { button.disabled = true; });
+        run('decideInvoice', { id, action, note }).then(refresh).catch(error => { reportFailure(error); refresh(); });
       }
-      function loadApp() {
-        google.script.run.withSuccessHandler(info => {
-        $('#identity').textContent = info.user;
-        $('#setup').hidden = info.initialized || !info.admin;
-        $('#notReady').hidden = info.initialized || info.admin;
-        $('#submission').closest('section').hidden = !info.initialized;
-        $('#invoices').closest('section').hidden = !info.initialized;
-        const selects = [document.querySelector('[name=approver1]'), document.querySelector('[name=approver2]')];
+
+      function applyRouting() {
+        if (!setup || revisionId) return;
+        const amount = Number($('#submission').elements.amount.value);
+        if (!(amount >= 0)) return;
+        const rule = (setup.routing || []).filter(item => item.min <= amount).sort((a, b) => b.min - a.min)[0];
+        if (!rule) return;
+        const form = $('#submission');
+        form.elements.approver1.value = rule.approver1;
+        form.elements.approver2.value = rule.approver2 || '';
+      }
+
+      function fillApproverSelects(approvers, defaultApprover) {
+        const selects = [$('[name=approver1]'), $('[name=approver2]')];
         selects.forEach(select => {
           while (select.options.length > (select.name === 'approver2' ? 1 : 0)) select.remove(select.options.length - 1);
         });
-        info.approvers.forEach(approver => {
+        approvers.forEach(approver => {
           const option = new Option(`${approver.name} (${approver.email})`, approver.email);
           selects.forEach(select => select.add(option.cloneNode(true)));
         });
-        selects[0].value = info.defaultApprover;
-        if (info.initialized) refresh();
-        }).withFailureHandler(error => {
-          showError($('#appError'), error);
-        }).getSetupInfo();
+        selects[0].value = defaultApprover;
       }
+
+      function loadApp() {
+        run('getSetupInfo').then(info => {
+          setup = info;
+          const ready = info.initialized && !info.upgradeNeeded;
+          $('#identity').textContent = info.user;
+          $('#setup').hidden = ready || !info.admin;
+          $('#notReady').hidden = ready || info.admin;
+          $('#submission').closest('section').hidden = !ready;
+          $('#invoices').closest('section').hidden = !ready;
+          $('#signatureSection').hidden = !(ready && info.isApprover);
+          $('#adminSection').hidden = !(ready && info.admin);
+          if (!ready) return;
+          fillApproverSelects(info.approvers, info.defaultApprover);
+          $('#fileHint').textContent = `PDF up to ${info.maxUploadMb} MB.`;
+          refresh();
+          if (info.isApprover) loadSignature();
+          if (info.admin) loadAdmin();
+        }).catch(error => showError($('#appError'), error));
+      }
+
+      // Signature pad
+      const pad = $('#sigPad');
+      const ctx = pad.getContext('2d');
+      let drawing = false;
+      let inked = false;
+      ctx.lineWidth = 2.5;
+      ctx.lineCap = 'round';
+      ctx.strokeStyle = '#111';
+      const point = event => {
+        const rect = pad.getBoundingClientRect();
+        return { x: (event.clientX - rect.left) * pad.width / rect.width, y: (event.clientY - rect.top) * pad.height / rect.height };
+      };
+      pad.addEventListener('pointerdown', event => {
+        drawing = true;
+        pad.setPointerCapture(event.pointerId);
+        const { x, y } = point(event);
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+      });
+      pad.addEventListener('pointermove', event => {
+        if (!drawing) return;
+        const { x, y } = point(event);
+        ctx.lineTo(x, y);
+        ctx.stroke();
+        inked = true;
+      });
+      ['pointerup', 'pointercancel'].forEach(name => pad.addEventListener(name, () => { drawing = false; }));
+      function clearPad() { ctx.clearRect(0, 0, pad.width, pad.height); inked = false; }
+      $('#clearSignature').addEventListener('click', clearPad);
+      $('#saveSignature').addEventListener('click', () => {
+        const message = $('#signatureMessage');
+        if (!inked) return showError(message, new Error('Draw your signature first.'));
+        run('saveSignature', pad.toDataURL('image/png')).then(() => {
+          showOk(message, 'Signature saved.');
+          clearPad();
+          loadSignature();
+        }).catch(error => showError(message, error));
+      });
+      function loadSignature() {
+        run('getMySignature').then(url => {
+          $('#currentSignature').innerHTML = url
+            ? `<p>Current signature:</p><img alt="Your saved signature" src="${escapeHtml(url)}" style="max-width:300px;border:1px solid #d1d5db;background:#fff">`
+            : '<p class="error">No signature saved yet. You must save one before approving.</p>';
+        }).catch(error => showError($('#signatureMessage'), error));
+      }
+
+      // Admin
+      function loadAdmin() {
+        run('getAdminData').then(data => {
+          const form = $('#settingsForm');
+          const select = form.elements.DEFAULT_APPROVER;
+          select.innerHTML = '<option value="">None</option>' + data.approvers.filter(item => item.active)
+            .map(item => `<option value="${escapeHtml(item.email)}">${escapeHtml(item.name)} (${escapeHtml(item.email)})</option>`).join('');
+          Object.keys(data.settings).forEach(key => { if (form.elements[key]) form.elements[key].value = data.settings[key]; });
+          $('#adminInfo').textContent = `Daily reminders: ${data.remindersScheduled ? 'enabled' : 'not enabled'}. Email sends remaining today: ${data.mailQuotaRemaining}.`;
+          $('#approverTable').innerHTML = '<tr><th>Name</th><th>Email</th><th>Status</th><th>Signature</th><th></th></tr>' +
+            data.approvers.map(item => `<tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.email)}</td>
+              <td>${item.active ? 'Active' : 'Inactive'}</td><td>${item.hasSignature ? 'Saved' : 'None'}</td>
+              <td>${item.hasSignature ? `<button class="secondary" onclick="resetSig('${escapeHtml(item.email)}')">Reset</button>` : ''}</td></tr>`).join('');
+          window.adminApprovers = data.approvers;
+          renderRules(data.routing);
+        }).catch(error => showError($('#adminMessage'), error));
+      }
+      function renderRules(rules) {
+        const options = '<option value="">—</option>' + window.adminApprovers
+          .map(item => `<option value="${escapeHtml(item.email)}">${escapeHtml(item.name)}</option>`).join('');
+        $('#routingTable').innerHTML = '<tr><th>Min amount</th><th>Approver 1</th><th>Approver 2</th><th>Active</th></tr>' +
+          rules.map(rule => `<tr><td><input type="number" min="0" step="0.01" value="${escapeHtml(rule.min)}"></td>
+            <td><select data-value="${escapeHtml(String(rule.approver1).toLowerCase())}">${options}</select></td>
+            <td><select data-value="${escapeHtml(String(rule.approver2).toLowerCase())}">${options}</select></td>
+            <td><input type="checkbox" ${rule.active ? 'checked' : ''}></td></tr>`).join('');
+        $('#routingTable').querySelectorAll('select').forEach(select => { select.value = select.dataset.value; });
+      }
+      function currentRules() {
+        return [...$('#routingTable').querySelectorAll('tr')].slice(1).map(row => {
+          const [min, a1, a2, active] = row.querySelectorAll('input, select');
+          return { min: Number(min.value), approver1: a1.value, approver2: a2.value, active: active.checked };
+        });
+      }
+      function resetSig(email) {
+        if (confirm(`Reset the saved signature for ${email}? They must draw a new one before approving.`)) {
+          run('resetSignature', email).then(loadAdmin).catch(error => showError($('#adminMessage'), error));
+        }
+      }
+      $('#addRule').addEventListener('click', () => renderRules([...currentRules(), { min: 0, approver1: '', approver2: '', active: true }]));
+      $('#saveRules').addEventListener('click', () => {
+        run('saveRouting', currentRules()).then(() => { showOk($('#adminMessage'), 'Routing rules saved.'); refreshSetup(); })
+          .catch(error => showError($('#adminMessage'), error));
+      });
+      $('#settingsForm').addEventListener('submit', event => {
+        event.preventDefault();
+        run('saveSettings', Object.fromEntries(new FormData(event.currentTarget).entries()))
+          .then(() => { showOk($('#adminMessage'), 'Settings saved.'); refreshSetup(); })
+          .catch(error => showError($('#adminMessage'), error));
+      });
+      $('#approverForm').addEventListener('submit', event => {
+        event.preventDefault();
+        const form = event.currentTarget;
+        const input = Object.fromEntries(new FormData(form).entries());
+        input.active = input.active === 'true';
+        run('saveApprover', input).then(() => { form.reset(); showOk($('#adminMessage'), 'Approver saved.'); loadAdmin(); refreshSetup(); })
+          .catch(error => showError($('#adminMessage'), error));
+      });
+      $('#scheduleReminders').addEventListener('click', () => {
+        run('installReminderTrigger').then(() => { showOk($('#adminMessage'), 'Daily reminders enabled.'); loadAdmin(); })
+          .catch(error => showError($('#adminMessage'), error));
+      });
+      function refreshSetup() {
+        run('getSetupInfo').then(info => {
+          setup = info;
+          fillApproverSelects(info.approvers, info.defaultApprover);
+        }).catch(error => showError($('#appError'), error));
+      }
+
       window.addEventListener('load', loadApp);
       $('#initialize').addEventListener('click', () => {
         const button = $('#initialize');
         button.disabled = true;
-        google.script.run.withSuccessHandler(loadApp)
-          .withFailureHandler(error => {
-            showError($('#setupMessage'), error);
-            button.disabled = false;
-          }).initializeSheets();
+        run('initializeSheets').then(loadApp).catch(error => {
+          showError($('#setupMessage'), error);
+          button.disabled = false;
+        });
       });
+      $('#submission').elements.amount.addEventListener('change', applyRouting);
       $('#submission').addEventListener('submit', async event => {
         event.preventDefault();
         const form = event.currentTarget;
@@ -151,37 +383,35 @@
         button.disabled = true;
         try {
           const file = form.elements.file.files[0];
-          if (!file || file.type !== 'application/pdf') throw new Error('Choose a PDF invoice.');
-          const data = await new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve(reader.result.split(',')[1]);
-            reader.onerror = () => reject(new Error('Could not read the selected PDF.'));
-            reader.readAsDataURL(file);
-          });
           const input = Object.fromEntries(new FormData(form).entries());
           delete input.file;
-          input.file = { name: file.name, data };
+          if (file) {
+            if (file.type !== 'application/pdf') throw new Error('Choose a PDF invoice.');
+            input.file = { name: file.name, data: await fileToBase64(file) };
+          } else if (!revisionId) {
+            throw new Error('Choose a PDF invoice.');
+          }
           const method = revisionId ? 'resubmitInvoice' : 'submitInvoice';
           if (revisionId) input.invoiceId = revisionId;
-          google.script.run.withSuccessHandler(() => {
-            revisionId = '';
-            form.reset();
-            form.querySelector('button[type=submit]').textContent = 'Submit invoice';
-            $('#cancelRevision').hidden = true;
-            message.className = '';
-            message.textContent = 'Invoice submitted.';
-            refresh();
-            button.disabled = false;
-          }).withFailureHandler(error => {
-            showError(message, error);
-            button.disabled = false;
-          })[method](input);
+          let result;
+          try {
+            result = await run(method, input);
+          } catch (error) {
+            if (!String(error.message).startsWith('DUPLICATE:') ||
+                !confirm(`${error.message.slice(10).trim()}\n\nSubmit anyway?`)) throw error;
+            input.confirmDuplicate = true;
+            result = await run(method, input);
+          }
+          resetForm();
+          if (result.packageReady) showOk(message, 'Invoice submitted. The approver has been notified.');
+          else showError(message, new Error('Invoice saved, but the review package could not be built. Use "Rebuild package" below.'));
+          refresh();
         } catch (error) {
           showError(message, error);
-          button.disabled = false;
         }
+        button.disabled = false;
       });
-        $('#cancelRevision').addEventListener('click', cancelRevision);
+      $('#cancelRevision').addEventListener('click', cancelRevision);
     </script>
   </body>
 </html>
