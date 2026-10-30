@@ -49,3 +49,34 @@ test('merge endpoint prepends the topsheet pages to the invoice pages', async ()
   const merged = await PDFDocument.load(Buffer.from(result.pdf, 'base64'));
   assert.equal(merged.getPageCount(), 3);
 });
+
+test('package endpoint builds a topsheet with a stamped signature ahead of the invoice', async () => {
+  const invoice = await PDFDocument.create();
+  invoice.addPage();
+  invoice.addPage();
+  // 1x1 transparent PNG
+  const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+  const response = await fetch(endpoint.replace('/merge', '/package'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Service-Token': process.env.PDF_SERVICE_TOKEN },
+    body: JSON.stringify({
+      invoice: Buffer.from(await invoice.save()).toString('base64'),
+      topsheet: {
+        vendor: 'Acme “Ltd” \u2603', po: 'PO-1', invoiceNo: '42', invoiceDate: '2026-01-02',
+        amount: '$10.00', submitter: 'a@example.edu', notes: 'line\n'.repeat(30),
+        approvals: [
+          { order: 1, name: 'Pat', title: 'Director', signature: png, date: '2026-01-03', note: 'ok' },
+          { order: 2, name: 'Sam' },
+        ],
+      },
+    }),
+  });
+  assert.equal(response.status, 200);
+  const merged = await PDFDocument.load(Buffer.from((await response.json()).pdf, 'base64'));
+  assert.equal(merged.getPageCount(), 3);
+});
+
+test('package endpoint requires its service token', async () => {
+  const response = await fetch(endpoint.replace('/merge', '/package'), { method: 'POST', body: '{}', headers: { 'Content-Type': 'application/json' } });
+  assert.equal(response.status, 401);
+});
