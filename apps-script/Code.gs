@@ -247,10 +247,10 @@ function getDashboard() {
         status: row.Status,
         vendor: row.Vendor,
         invoiceNo: row.InvoiceNo,
-        invoiceDate: row.InvoiceDate,
+        invoiceDate: plain_(row.InvoiceDate),
         amount: Number(row.Amount),
         submitter: row.SubmitterEmail,
-        createdAt: row.CreatedAt,
+        createdAt: String(plain_(row.CreatedAt)),
         canApprove: pendingByInvoice.has(row.ID) && ready,
         awaitingPackage: pendingByInvoice.has(row.ID) && !ready,
         canRebuild: pendingStatus && !ready && (admin || row.SubmitterEmail === user.email),
@@ -282,7 +282,7 @@ function searchInvoices(query) {
     .slice(0, 100)
     .map(row => ({
       id: row.ID, status: row.Status, vendor: row.Vendor, po: row.PO, invoiceNo: row.InvoiceNo,
-      invoiceDate: row.InvoiceDate, amount: Number(row.Amount), submitter: row.SubmitterEmail,
+      invoiceDate: plain_(row.InvoiceDate), amount: Number(row.Amount), submitter: row.SubmitterEmail,
       canView: Boolean(row.PackageFileId || row.FinalFileId) &&
         (admin || row.SubmitterEmail === user.email || involved.has(row.ID)),
     }));
@@ -573,7 +573,7 @@ function buildPackage_(db, invoice) {
       invoice: Utilities.base64Encode(original.getBytes()),
       topsheet: {
         vendor: invoice.Vendor, po: invoice.PO, invoiceNo: invoice.InvoiceNo,
-        invoiceDate: invoice.InvoiceDate, amount: formatAmount_(invoice.Amount),
+        invoiceDate: String(plain_(invoice.InvoiceDate)), amount: formatAmount_(invoice.Amount),
         notes: invoice.Notes, submitter: invoice.SubmitterEmail, approvals,
       },
     }),
@@ -611,7 +611,7 @@ function finalizeInvoice_(db, invoice, actor) {
     const filename = [
       safeName_(invoice.Vendor), safeName_(invoice.InvoiceNo),
       formatAmount_(invoice.Amount), safeName_(invoice.PO),
-      Utilities.formatDate(new Date(`${invoice.InvoiceDate}T00:00:00`), Session.getScriptTimeZone(), 'MM-dd-yy'),
+      Utilities.formatDate(new Date(`${plain_(invoice.InvoiceDate)}T00:00:00`), Session.getScriptTimeZone(), 'MM-dd-yy'),
     ].join(', ') + '.pdf';
     const finalFile = vendorFolder.createFile(merged.setName(filename));
     if (settings.AP_EMAIL) {
@@ -991,8 +991,28 @@ function sendNotice_(email, subject, body) {
     const message = appUrl ? `${body}\n\nOpen the invoice approval app: ${appUrl}` : body;
     MailApp.sendEmail(email, subject, message);
   } catch (error) {
-    // A failed notice (for example, mail quota) must not undo a completed workflow step.
+    // A failed notice must not undo a completed workflow step, but record it so admins can see why.
+    try {
+      audit_(getDb_(), '', 'system', 'Email failed', { to: email, subject, message: String(error.message || error) });
+    } catch (ignored) {
+      // Nothing more can be done.
+    }
   }
+}
+
+// Run once from the Apps Script editor to grant every permission the app needs (mail, Drive, Sheets, external requests).
+function authorizeApp() {
+  MailApp.getRemainingDailyQuota();
+  DriveApp.getRootFolder();
+  getDb_().getName();
+  UrlFetchApp.fetch('https://www.google.com', { muteHttpExceptions: true });
+  ScriptApp.getProjectTriggers();
+  return 'Authorized';
+}
+
+// Sheets turns ISO date strings into Date objects, which google.script.run cannot return.
+function plain_(value) {
+  return value instanceof Date ? Utilities.formatDate(value, 'UTC', 'yyyy-MM-dd') : value;
 }
 
 function getOrCreateFolder_(parent, name) {
