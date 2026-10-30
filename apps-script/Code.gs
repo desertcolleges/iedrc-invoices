@@ -226,6 +226,17 @@ function getSetupInfo() {
   };
 }
 
+// Everything the page needs on load in a single round trip.
+function getBootstrap() {
+  const setup = getSetupInfo();
+  const result = { setup };
+  if (!setup.initialized || setup.upgradeNeeded) return result;
+  result.dashboard = getDashboard();
+  if (setup.isApprover) result.signature = getMySignature();
+  if (setup.admin) result.admin = getAdminData();
+  return result;
+}
+
 function getDashboard() {
   const user = requireUser_();
   const db = getDb_();
@@ -581,7 +592,7 @@ function buildPackage_(db, invoice) {
       // Invoices signed before saved signatures stored a typed name instead of a Drive file reference.
       if (stored.startsWith('file:')) {
         try {
-          entry.signature = Utilities.base64Encode(DriveApp.getFileById(stored.slice(5)).getBlob().getBytes());
+          entry.signature = signatureBase64_(stored.slice(5));
         } catch (error) {
           entry.signatureText = entry.name;
         }
@@ -643,7 +654,15 @@ function renderTemplateTopsheet_(templateId, data, invoice) {
       if (!entry.signature) values[`APPROVER${order}_SIG`] = entry.signatureText || '';
     }
     Object.keys(values).forEach(key => {
-      body.replaceText(`\\{\\{${key}\\}\\}`, String(values[key] || '').replace(/\$/g, '\\$'));
+      const token = `\\{\\{${key}\\}\\}`;
+      const text = String(values[key] || '');
+      // Literal insertion: replaceText treats "$" and "\\" in the replacement specially.
+      let found;
+      while ((found = body.findText(token))) {
+        const element = found.getElement().asText();
+        element.deleteText(found.getStartOffset(), found.getEndOffsetInclusive());
+        if (text) element.insertText(found.getStartOffset(), text);
+      }
     });
     data.approvals.filter(entry => entry.signature).forEach(entry => {
       const found = body.findText(`\\{\\{APPROVER${entry.order}_SIG\\}\\}`);
@@ -744,8 +763,18 @@ function getMySignature() {
   const user = requireUser_();
   const approver = findApprover_(getDb_(), user.email);
   if (!approver || !approver.SignatureFileId) return '';
-  const bytes = DriveApp.getFileById(String(approver.SignatureFileId)).getBlob().getBytes();
-  return `data:image/png;base64,${Utilities.base64Encode(bytes)}`;
+  return `data:image/png;base64,${signatureBase64_(String(approver.SignatureFileId))}`;
+}
+
+// Signature files are immutable (a new save creates a new file ID), so caching by ID is safe.
+function signatureBase64_(fileId) {
+  const cache = CacheService.getScriptCache();
+  const key = `sig_${fileId}`;
+  const hit = cache.get(key);
+  if (hit) return hit;
+  const encoded = Utilities.base64Encode(DriveApp.getFileById(fileId).getBlob().getBytes());
+  if (encoded.length < 90000) cache.put(key, encoded, 21600);
+  return encoded;
 }
 
 function saveSignature(dataUrl) {
@@ -986,8 +1015,10 @@ function getConfig_() {
 function getDb_() {
   const id = PropertiesService.getScriptProperties().getProperty('SPREADSHEET_ID');
   if (!id) throw new Error('Set SPREADSHEET_ID in Script Properties.');
-  return SpreadsheetApp.openById(id);
+  if (!dbHandle_ || dbHandle_.id !== id) dbHandle_ = { id, db: SpreadsheetApp.openById(id) };
+  return dbHandle_.db;
 }
+let dbHandle_ = null;
 
 function withLock_(fn) {
   const lock = LockService.getScriptLock();

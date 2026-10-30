@@ -32,6 +32,7 @@
       nav button { background: #e5e7eb; color: #1f2937; }
       nav button[aria-selected=true] { background: #155e8a; color: white; }
       .inactive { display: none; }
+      #viewer:not([hidden]) { display: flex; }
       #busy { position: fixed; inset: 0 0 auto 0; z-index: 10; background: #155e8a; color: #fff; padding: .6rem 1rem; text-align: center; box-shadow: 0 2px 6px #0004; }
       #busy::before { content: ''; display: inline-block; width: .9em; height: .9em; margin-right: .6em; vertical-align: -.1em; border: 2px solid #fff6; border-top-color: #fff; border-radius: 50%; animation: spin .8s linear infinite; }
       @keyframes spin { to { transform: rotate(360deg); } }
@@ -39,6 +40,14 @@
     </style>
   </head>
   <body>
+    <div id="viewer" hidden style="position:fixed;inset:0;z-index:20;background:#0009;flex-direction:column">
+      <div style="background:#12395b;color:#fff;padding:.6rem 1rem;display:flex;gap:.6rem;align-items:center">
+        <strong id="viewerTitle" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></strong>
+        <button type="button" class="secondary" id="viewerDownload">Download</button>
+        <button type="button" class="secondary" onclick="closeViewer()">Close</button>
+      </div>
+      <div id="viewerPages" style="flex:1;overflow:auto;padding:1rem;max-width:900px;width:100%;box-sizing:border-box;margin:0 auto"></div>
+    </div>
     <div id="busy" role="status" hidden>Working…</div>
     <header><strong>IEDRC Invoice Approval</strong><span id="identity" style="float:right"></span></header>
     <main id="app">
@@ -232,20 +241,55 @@
           renderInvoices();
         }).catch(error => showError($('#invoices'), error));
       }
+      const PDFJS_BASE = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/';
+      let pdfjsReady = null;
+      function loadPdfJs() {
+        pdfjsReady = pdfjsReady || new Promise((resolve, reject) => {
+          const script = document.createElement('script');
+          script.src = PDFJS_BASE + 'pdf.min.js';
+          script.onload = () => { pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_BASE + 'pdf.worker.min.js'; resolve(pdfjsLib); };
+          script.onerror = () => { pdfjsReady = null; reject(new Error('Could not load the PDF viewer.')); };
+          document.head.appendChild(script);
+        });
+        return pdfjsReady;
+      }
+      function closeViewer() { $('#viewer').hidden = true; $('#viewerPages').innerHTML = ''; }
+      function downloadBytes(bytes, name) {
+        const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = name;
+        link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 60000);
+      }
       async function openPackage(id, button) {
         button.disabled = true;
         try {
-          const pkg = await run('getPackage', id);
+          const [pkg, pdfjs] = await Promise.all([run('getPackage', id), loadPdfJs().catch(() => null)]);
           const bytes = Uint8Array.from(atob(pkg.data), char => char.charCodeAt(0));
-          const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
-          const link = document.createElement('a');
-          link.href = url;
-          link.target = '_blank';
-          link.download = pkg.name;
-          link.rel = 'noopener';
-          link.click();
-          setTimeout(() => URL.revokeObjectURL(url), 60000);
+          if (!pdfjs) {
+            downloadBytes(bytes, pkg.name);
+          } else {
+            $('#viewerTitle').textContent = pkg.name;
+            $('#viewerDownload').onclick = () => downloadBytes(bytes, pkg.name);
+            const pages = $('#viewerPages');
+            pages.innerHTML = '';
+            $('#viewer').hidden = false;
+            const pdf = await pdfjs.getDocument({ data: bytes.slice() }).promise;
+            const scale = Math.min(2, Math.max(1, (window.devicePixelRatio || 1)));
+            for (let number = 1; number <= pdf.numPages; number++) {
+              const page = await pdf.getPage(number);
+              const viewport = page.getViewport({ scale: 1.4 * scale });
+              const canvas = document.createElement('canvas');
+              canvas.width = viewport.width;
+              canvas.height = viewport.height;
+              canvas.style.cssText = 'width:100%;height:auto;background:#fff;margin-bottom:.6rem;box-shadow:0 1px 3px #0004';
+              pages.appendChild(canvas);
+              await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+            }
+          }
         } catch (error) {
+          closeViewer();
           showError($('#appError'), error);
         }
         button.disabled = false;
@@ -314,7 +358,8 @@
       }
 
       function loadApp() {
-        run('getSetupInfo').then(info => {
+        run('getBootstrap').then(boot => {
+          const info = boot.setup;
           setup = info;
           const ready = info.initialized && !info.upgradeNeeded;
           $('#identity').textContent = info.user;
@@ -329,9 +374,10 @@
           if (!ready) return;
           fillApproverSelects(info.approvers, info.defaultApprover);
           $('#fileHint').textContent = `PDF up to ${info.maxUploadMb} MB.`;
-          refresh();
-          if (info.isApprover) loadSignature();
-          if (info.admin) loadAdmin();
+          window.invoiceData = boot.dashboard;
+          renderInvoices();
+          if (info.isApprover) applySignature(boot.signature);
+          if (info.admin) applyAdmin(boot.admin);
         }).catch(error => showError($('#appError'), error));
       }
 
@@ -374,16 +420,22 @@
         }).catch(error => showError(message, error));
       });
       function loadSignature() {
-        run('getMySignature').then(url => {
+        run('getMySignature').then(applySignature).catch(error => showError($('#signatureMessage'), error));
+      }
+      function applySignature(url) {
+        {
           $('#currentSignature').innerHTML = url
             ? `<p>Current signature:</p><img alt="Your saved signature" src="${escapeHtml(url)}" style="max-width:300px;border:1px solid #d1d5db;background:#fff">`
             : '<p class="error">No signature saved yet. You must save one before approving.</p>';
-        }).catch(error => showError($('#signatureMessage'), error));
+        }
       }
 
       // Admin
       function loadAdmin() {
-        run('getAdminData').then(data => {
+        run('getAdminData').then(applyAdmin).catch(error => showError($('#adminMessage'), error));
+      }
+      function applyAdmin(data) {
+        {
           const form = $('#settingsForm');
           const select = form.elements.DEFAULT_APPROVER;
           select.innerHTML = '<option value="">None</option>' + data.approvers.filter(item => item.active)
@@ -398,7 +450,7 @@
                 <button class="reject" type="button" onclick="deleteApprover('${escapeHtml(item.email)}')">Delete</button></td></tr>`).join('');
           window.adminApprovers = data.approvers;
           renderRules(data.routing);
-        }).catch(error => showError($('#adminMessage'), error));
+        }
       }
       function renderRules(rules) {
         const options = '<option value="">—</option>' + window.adminApprovers
@@ -478,6 +530,7 @@
       }
 
       window.addEventListener('load', loadApp);
+      document.addEventListener('keydown', event => { if (event.key === 'Escape') closeViewer(); });
       $('#initialize').addEventListener('click', () => {
         const button = $('#initialize');
         button.disabled = true;
