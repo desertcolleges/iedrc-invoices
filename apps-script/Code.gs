@@ -266,6 +266,28 @@ function getDashboard() {
     .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
 }
 
+// Any authorized user can find invoices; only summary fields are returned.
+function searchInvoices(query) {
+  const user = requireUser_();
+  const db = getDb_();
+  const admin = isAdmin_(db, user.email);
+  const involved = new Set(getApprovals_(db).filter(row => row.ApproverEmail === user.email).map(row => row.InvoiceID));
+  const terms = String(query || '').toLowerCase().split(/\s+/).filter(Boolean).slice(0, 8);
+  return getInvoices_(db)
+    .filter(row => {
+      const haystack = [row.Vendor, row.PO, row.InvoiceNo, row.Status, row.SubmitterEmail].join(' ').toLowerCase();
+      return terms.every(term => haystack.includes(term));
+    })
+    .sort((a, b) => String(b.CreatedAt).localeCompare(String(a.CreatedAt)))
+    .slice(0, 100)
+    .map(row => ({
+      id: row.ID, status: row.Status, vendor: row.Vendor, po: row.PO, invoiceNo: row.InvoiceNo,
+      invoiceDate: row.InvoiceDate, amount: Number(row.Amount), submitter: row.SubmitterEmail,
+      canView: Boolean(row.PackageFileId || row.FinalFileId) &&
+        (admin || row.SubmitterEmail === user.email || involved.has(row.ID)),
+    }));
+}
+
 function resolveApprovers_(db, user, input, settings) {
   const approvers = getRows_(db, SHEETS.approvers)
     .filter(row => String(row.Active).toLowerCase() === 'true')

@@ -28,6 +28,10 @@
       td, th { padding: .3rem; text-align: left; }
       td input, td select { width: 100%; box-sizing: border-box; }
       details > summary { cursor: pointer; font-weight: bold; font-size: 1.1rem; }
+      nav { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: 1rem; }
+      nav button { background: #e5e7eb; color: #1f2937; }
+      nav button[aria-selected=true] { background: #155e8a; color: white; }
+      .inactive { display: none; }
       @media (max-width: 600px) { form { grid-template-columns: 1fr; } label.full { grid-column: auto; } }
     </style>
   </head>
@@ -44,7 +48,8 @@
       <section id="notReady" hidden>
         <p>The app is not initialized yet. Ask an administrator to complete setup.</p>
       </section>
-      <section>
+      <nav id="tabs" role="tablist"></nav>
+      <section data-tab="submit" data-label="Submit invoice">
         <h2>Submit an invoice</h2>
         <form id="submission">
           <label>Vendor<input name="vendor" required maxlength="200"></label>
@@ -60,7 +65,7 @@
         </form>
         <p id="formMessage" class="error" role="status"></p>
       </section>
-      <section id="signatureSection" hidden>
+      <section id="signatureSection" data-tab="signature" data-label="My signature" hidden>
         <h2>My signature</h2>
         <p class="muted">Draw your signature once. It is applied to the topsheet each time you approve; you do not need to sign again.</p>
         <div id="currentSignature"></div>
@@ -71,7 +76,7 @@
         </div>
         <p id="signatureMessage" class="error" role="status"></p>
       </section>
-      <section id="adminSection" hidden>
+      <section id="adminSection" data-tab="admin" data-label="Admin" hidden>
         <details>
           <summary>Admin settings</summary>
           <form id="settingsForm">
@@ -101,16 +106,25 @@
           <p id="adminMessage" class="error" role="status"></p>
         </details>
       </section>
-      <section>
+      <section data-tab="mine" data-label="My invoices &amp; approvals">
         <h2>My invoices and approvals</h2>
-        <input id="invoiceSearch" type="search" placeholder="Search vendor, PO, invoice #, status" aria-label="Search invoices" style="width:100%;box-sizing:border-box;margin-bottom:.8rem">
         <div id="invoices" class="muted">Loading…</div>
+      </section>
+      <section data-tab="view" data-label="View invoices">
+        <h2>View invoices</h2>
+        <p class="muted">Search all submitted invoices by vendor, PO, invoice number, status or submitter.</p>
+        <form id="searchForm" style="grid-template-columns:1fr auto">
+          <input id="searchQuery" type="search" placeholder="Search invoices" aria-label="Search all invoices">
+          <button type="submit">Search</button>
+        </form>
+        <div id="searchResults" class="muted"></div>
       </section>
     </main>
     <script>
       const $ = selector => document.querySelector(selector);
       let revisionId = '';
       let setup = null;
+      let activeTab = 'submit';
       const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char =>
         ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
       const money = value => '$' + Number(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -154,12 +168,45 @@
           ${invoice.canRetry ? `<div class="actions"><button class="secondary" onclick="retry('${id}')">Retry finalization</button></div>` : ''}
         </article>`;
       }
+      function showTab(name) {
+        document.querySelectorAll('[data-tab]').forEach(section => section.classList.toggle('inactive', section.dataset.tab !== name));
+        document.querySelectorAll('#tabs button').forEach(button => button.setAttribute('aria-selected', String(button.dataset.tab === name)));
+        activeTab = name;
+        if (name === 'view' && !$('#searchResults').dataset.loaded) searchInvoices();
+      }
+      function renderTabs() {
+        const visible = [...document.querySelectorAll('[data-tab]')].filter(section => !section.hidden);
+        $('#tabs').innerHTML = visible.map(section =>
+          `<button type="button" role="tab" data-tab="${section.dataset.tab}">${section.dataset.label}</button>`).join('');
+        $('#tabs').querySelectorAll('button').forEach(button => button.addEventListener('click', () => showTab(button.dataset.tab)));
+        showTab(visible.some(section => section.dataset.tab === activeTab) ? activeTab : (visible[0] || {}).dataset?.tab);
+      }
+      function searchCard(item) {
+        return `<article class="invoice">
+          <strong>${escapeHtml(item.vendor)} — ${escapeHtml(item.invoiceNo)}</strong>
+          <div>${escapeHtml(item.status)}</div>
+          <div class="details">
+            <div><span>Amount</span>${money(item.amount)}</div>
+            <div><span>PO</span>${escapeHtml(item.po)}</div>
+            <div><span>Invoice date</span>${escapeHtml(item.invoiceDate)}</div>
+            <div><span>Submitted by</span>${escapeHtml(item.submitter)}</div>
+          </div>
+          ${item.canView ? `<div class="actions"><button class="secondary" onclick="openPackage('${escapeHtml(item.id)}', this)">View package</button></div>` : ''}
+        </article>`;
+      }
+      function searchInvoices() {
+        const target = $('#searchResults');
+        target.dataset.loaded = '1';
+        target.className = 'muted';
+        target.textContent = 'Searching…';
+        run('searchInvoices', $('#searchQuery').value).then(data => {
+          target.className = '';
+          target.innerHTML = data.length ? data.map(searchCard).join('') : '<p>No matching invoices.</p>';
+        }).catch(error => showError(target, error));
+      }
+      $('#searchForm').addEventListener('submit', event => { event.preventDefault(); searchInvoices(); });
       function renderInvoices() {
-        const terms = $('#invoiceSearch').value.toLowerCase().split(/\s+/).filter(Boolean);
-        const data = (window.invoiceData || []).filter(item => {
-          const haystack = [item.vendor, item.po, item.invoiceNo, item.status, item.submitter].join(' ').toLowerCase();
-          return terms.every(term => haystack.includes(term));
-        });
+        const data = window.invoiceData || [];
         $('#invoices').className = '';
         $('#invoices').innerHTML = data.length ? data.map(invoiceCard).join('') : '<p>No invoices to show.</p>';
       }
@@ -169,7 +216,6 @@
           renderInvoices();
         }).catch(error => showError($('#invoices'), error));
       }
-      $('#invoiceSearch').addEventListener('input', renderInvoices);
       async function openPackage(id, button) {
         button.disabled = true;
         try {
@@ -254,8 +300,10 @@
           $('#notReady').hidden = ready || info.admin;
           $('#submission').closest('section').hidden = !ready;
           $('#invoices').closest('section').hidden = !ready;
+          $('#searchForm').closest('section').hidden = !ready;
           $('#signatureSection').hidden = !(ready && info.isApprover);
           $('#adminSection').hidden = !(ready && info.admin);
+          renderTabs();
           if (!ready) return;
           fillApproverSelects(info.approvers, info.defaultApprover);
           $('#fileHint').textContent = `PDF up to ${info.maxUploadMb} MB.`;
