@@ -85,3 +85,21 @@ test('reminderAction_ reminds on schedule and escalates once', () => {
   assert.equal(action({}, 6, { ...settings, ESCALATION_EMAIL: '' }), 'remind');
   assert.equal(action({}, 9, { ...settings, REMINDER_DAYS: '0', ESCALATION_DAYS: '0' }), '');
 });
+
+test('matchesCriteria_ filters by text, status, dates, amounts and people', () => {
+  const item = { vendor: 'Acme Corp', invoiceNo: 'INV-9', po: 'PO-77', notes: '', status: 'Filed',
+    invoiceDate: '2026-03-15', amount: 250, submitter: 'sam@x.edu', approver1: 'pat@x.edu', approver2: '' };
+  const match = criteria => call(`matchesCriteria_(${JSON.stringify(item)}, ${JSON.stringify(criteria)})`);
+  assert.equal(match({}), true);
+  assert.equal(match({ text: 'acme' }), true);
+  assert.equal(match({ text: 'po-77' }), true);
+  assert.equal(match({ text: 'zzz' }), false);
+  assert.equal(match({ status: 'Filed' }), true);
+  assert.equal(match({ status: 'Needs Revision' }), false);
+  assert.equal(match({ dateFrom: '2026-03-01', dateTo: '2026-03-31' }), true);
+  assert.equal(match({ dateFrom: '2026-04-01' }), false);
+  assert.equal(match({ minAmount: '100', maxAmount: '300' }), true);
+  assert.equal(match({ minAmount: '300' }), false);
+  assert.equal(match({ person: 'PAT@' }), true);
+  assert.equal(match({ person: 'lee@' }), false);
+});

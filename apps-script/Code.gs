@@ -230,9 +230,32 @@ function getSetupInfo() {
   };
 }
 
-function getDashboard() {
-  const user = requireUser_();
-  const db = getDb_();
+function invoiceView_(row, user, admin, pendingByInvoice) {
+  const ready = row.PackageStatus === 'Ready';
+  const pendingStatus = String(row.Status).startsWith('Pending');
+  return {
+    id: row.ID,
+    status: row.Status,
+    vendor: row.Vendor,
+    invoiceNo: row.InvoiceNo,
+    invoiceDate: row.InvoiceDate instanceof Date ? row.InvoiceDate.toISOString().slice(0, 10) : String(row.InvoiceDate),
+    amount: Number(row.Amount),
+    submitter: row.SubmitterEmail,
+    createdAt: row.CreatedAt,
+    canApprove: pendingByInvoice.has(row.ID) && ready,
+    awaitingPackage: pendingByInvoice.has(row.ID) && !ready,
+    canRebuild: pendingStatus && !ready && (admin || row.SubmitterEmail === user.email),
+    canRevise: row.Status === 'Needs Revision' && row.SubmitterEmail === user.email,
+    canRetry: row.Status === 'Finalization failed' && admin,
+    hasPackage: Boolean(row.PackageFileId || row.FinalFileId),
+    po: row.PO,
+    notes: row.Notes,
+    approver1: row.Approver1,
+    approver2: row.Approver2,
+  };
+}
+
+function accessibleInvoices_(db, user) {
   const admin = isAdmin_(db, user.email);
   const pendingByInvoice = new Set();
   const involved = new Set();
@@ -243,31 +266,40 @@ function getDashboard() {
   });
   return getInvoices_(db)
     .filter(row => admin || row.SubmitterEmail === user.email || involved.has(row.ID))
-    .map(row => {
-      const ready = row.PackageStatus === 'Ready';
-      const pendingStatus = String(row.Status).startsWith('Pending');
-      return {
-        id: row.ID,
-        status: row.Status,
-        vendor: row.Vendor,
-        invoiceNo: row.InvoiceNo,
-        invoiceDate: row.InvoiceDate,
-        amount: Number(row.Amount),
-        submitter: row.SubmitterEmail,
-        createdAt: row.CreatedAt,
-        canApprove: pendingByInvoice.has(row.ID) && ready,
-        awaitingPackage: pendingByInvoice.has(row.ID) && !ready,
-        canRebuild: pendingStatus && !ready && (admin || row.SubmitterEmail === user.email),
-        canRevise: row.Status === 'Needs Revision' && row.SubmitterEmail === user.email,
-        canRetry: row.Status === 'Finalization failed' && admin,
-        hasPackage: Boolean(row.PackageFileId || row.FinalFileId),
-        po: row.PO,
-        notes: row.Notes,
-        approver1: row.Approver1,
-        approver2: row.Approver2,
-      };
-    })
+    .map(row => invoiceView_(row, user, admin, pendingByInvoice))
     .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+}
+
+// Active work only: invoices still moving through the workflow or needing action.
+function getDashboard() {
+  const user = requireUser_();
+  const db = getDb_();
+  return accessibleInvoices_(db, user).filter(item => item.status !== 'Filed');
+}
+
+function matchesCriteria_(item, criteria) {
+  const c = criteria || {};
+  const text = String(c.text || '').trim().toLowerCase();
+  if (text && ![item.vendor, item.invoiceNo, item.po, item.notes]
+    .some(value => String(value || '').toLowerCase().includes(text))) return false;
+  if (c.status && item.status !== c.status) return false;
+  const person = String(c.person || '').trim().toLowerCase();
+  if (person && ![item.submitter, item.approver1, item.approver2]
+    .some(value => String(value || '').toLowerCase().includes(person))) return false;
+  if (c.dateFrom && item.invoiceDate < c.dateFrom) return false;
+  if (c.dateTo && item.invoiceDate > c.dateTo) return false;
+  if (c.minAmount !== undefined && c.minAmount !== '' && item.amount < Number(c.minAmount)) return false;
+  if (c.maxAmount !== undefined && c.maxAmount !== '' && item.amount > Number(c.maxAmount)) return false;
+  return true;
+}
+
+const SEARCH_LIMIT = 200;
+
+function searchInvoices(criteria) {
+  const user = requireUser_();
+  const db = getDb_();
+  const matches = accessibleInvoices_(db, user).filter(item => matchesCriteria_(item, criteria));
+  return { total: matches.length, results: matches.slice(0, SEARCH_LIMIT), limit: SEARCH_LIMIT };
 }
 
 function resolveApprovers_(db, user, input, settings) {

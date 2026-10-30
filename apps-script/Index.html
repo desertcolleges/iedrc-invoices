@@ -53,6 +53,7 @@
       <nav id="mainNav" class="tabbar" aria-label="Invoice workflow" hidden>
         <button type="button" data-tab-group="main" data-tab="submit" aria-selected="true">Submit invoice</button>
         <button type="button" data-tab-group="main" data-tab="invoices" aria-selected="false">My invoices & approvals</button>
+        <button type="button" data-tab-group="main" data-tab="search" aria-selected="false">View invoices</button>
         <button type="button" id="signatureTab" data-tab-group="main" data-tab="signature" aria-selected="false" hidden>My signature</button>
         <button type="button" id="adminTab" data-tab-group="main" data-tab="admin" aria-selected="false" hidden>Admin</button>
       </nav>
@@ -123,8 +124,28 @@
         </section>
         <p id="adminMessage" class="error" role="status"></p>
       </section>
+      <section id="searchPanel" class="tab-panel" data-tab-panel="main" data-tab="search" hidden>
+        <h2 class="panel-heading">View invoices</h2>
+        <p class="muted">Search all invoices you submitted, approve, or (as an admin) any invoice, including filed ones.</p>
+        <form id="searchForm">
+          <label>Vendor, invoice #, PO or notes<input name="text"></label>
+          <label>Status<select name="status">
+            <option value="">Any status</option><option>Pending Approver 1</option><option>Pending Approver 2</option>
+            <option>Needs Revision</option><option>Processing final PDF</option><option>Finalization failed</option><option>Filed</option>
+          </select></label>
+          <label>Invoice date from<input name="dateFrom" type="date"></label>
+          <label>Invoice date to<input name="dateTo" type="date"></label>
+          <label>Min amount<input name="minAmount" type="number" min="0" step="0.01"></label>
+          <label>Max amount<input name="maxAmount" type="number" min="0" step="0.01"></label>
+          <label class="full">Submitter or approver email<input name="person"></label>
+          <div class="full"><button type="submit">Search</button> <button type="button" class="secondary" id="clearSearch">Clear</button></div>
+        </form>
+        <p id="searchSummary" class="muted"></p>
+        <div id="searchResults"></div>
+      </section>
       <section id="invoicesPanel" class="tab-panel" data-tab-panel="main" data-tab="invoices" hidden>
         <h2 class="panel-heading">My invoices and approvals</h2>
+        <p class="muted">Invoices awaiting action or in progress. Filed invoices are under <strong>View invoices</strong>.</p>
         <div id="invoices" class="muted">Loading…</div>
       </section>
     </main>
@@ -189,7 +210,21 @@
           $('#invoices').className = '';
           $('#invoices').innerHTML = data.length ? data.map(invoiceCard).join('') : '<p>No invoices to show.</p>';
           window.invoiceData = data;
+          if ($('#searchResults').innerHTML) runSearch();
         }).catch(error => showError($('#invoices'), error));
+      }
+      function runSearch() {
+        const form = $('#searchForm');
+        const criteria = Object.fromEntries(new FormData(form).entries());
+        $('#searchSummary').textContent = 'Searching…';
+        return run('searchInvoices', criteria).then(data => {
+          if (!data || !Array.isArray(data.results)) throw new Error('The search response was invalid. Redeploy the latest Apps Script version.');
+          $('#searchSummary').textContent = data.total > data.results.length
+            ? `Showing the first ${data.results.length} of ${data.total} matches. Narrow your search to see the rest.`
+            : `${data.total} invoice${data.total === 1 ? '' : 's'} found.`;
+          $('#searchResults').innerHTML = data.results.map(invoiceCard).join('');
+          window.invoiceData = (window.invoiceData || []).concat(data.results.filter(r => !(window.invoiceData || []).some(i => i.id === r.id)));
+        }).catch(error => { $('#searchSummary').textContent = ''; showError($('#searchResults'), error); });
       }
       async function openPackage(id, button) {
         button.disabled = true;
@@ -280,7 +315,8 @@
           $('#notReady').hidden = ready || info.admin;
           $('#mainNav').hidden = !ready;
           $('#submitPanel').hidden = !ready;
-          $('#invoicesPanel').hidden = !ready;
+          $('#invoicesPanel').hidden = true;
+          $('#searchPanel').hidden = true;
           $('#signatureSection').hidden = !(ready && info.isApprover);
           $('#adminSection').hidden = !(ready && info.admin);
           $('#signatureTab').hidden = !(ready && info.isApprover);
@@ -422,6 +458,12 @@
         }).catch(error => showError($('#appError'), error));
       }
 
+      $('#searchForm').addEventListener('submit', event => { event.preventDefault(); runSearch(); });
+      $('#clearSearch').addEventListener('click', () => {
+        $('#searchForm').reset();
+        $('#searchResults').innerHTML = '';
+        $('#searchSummary').textContent = '';
+      });
       window.addEventListener('load', loadApp);
       $('#initialize').addEventListener('click', () => {
         const button = $('#initialize');
