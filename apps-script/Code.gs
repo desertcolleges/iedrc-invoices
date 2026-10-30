@@ -762,6 +762,23 @@ function saveApprover(input) {
   return { ok: true };
 }
 
+function deleteApprover(email) {
+  const { user, db } = requireAdmin_();
+  const target = String(email || '').trim().toLowerCase();
+  withLock_(() => {
+    const approver = findApprover_(db, target);
+    if (!approver) throw new Error('Approver not found.');
+    const open = getApprovals_(db).some(row => String(row.ApproverEmail).toLowerCase() === target &&
+      ['Pending', 'Queued'].includes(row.Decision));
+    if (open) throw new Error('This approver has invoices awaiting approval. Make them inactive instead, or wait until those are decided.');
+    if (approver.SignatureFileId) trashFile_(String(approver.SignatureFileId));
+    db.getSheetByName(SHEETS.approvers).deleteRow(approver._row);
+    clearMemo_();
+    audit_(db, '', user.email, 'Approver deleted', { email: target });
+  });
+  return { ok: true };
+}
+
 function resetSignature(email) {
   const { user, db } = requireAdmin_();
   const target = String(email || '').trim().toLowerCase();

@@ -97,7 +97,7 @@
             <label>Email<input name="email" type="email" required></label>
             <label>Title<input name="title"></label>
             <label>Active<select name="active"><option value="true">Active</option><option value="false">Inactive</option></select></label>
-            <div class="full"><button type="submit">Add or update approver</button></div>
+            <div class="full"><button type="submit" id="approverSubmit">Add approver</button> <button type="button" class="secondary" id="approverCancel" hidden onclick="resetApproverForm()">Cancel</button></div>
           </form>
           <h3>Routing rules</h3>
           <p class="muted">The highest matching "minimum amount" pre-selects approvers for submitters. Leave empty for no routing.</p>
@@ -368,10 +368,12 @@
             .map(item => `<option value="${escapeHtml(item.email)}">${escapeHtml(item.name)} (${escapeHtml(item.email)})</option>`).join('');
           Object.keys(data.settings).forEach(key => { if (form.elements[key]) form.elements[key].value = data.settings[key]; });
           $('#adminInfo').textContent = `Daily reminders: ${data.remindersScheduled ? 'enabled' : 'not enabled'}. Email sends remaining today: ${data.mailQuotaRemaining}.`;
-          $('#approverTable').innerHTML = '<tr><th>Name</th><th>Email</th><th>Status</th><th>Signature</th><th></th></tr>' +
+          $('#approverTable').innerHTML = '<tr><th>Name</th><th>Email</th><th>Status</th><th>Signature</th><th>Actions</th></tr>' +
             data.approvers.map(item => `<tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.email)}</td>
               <td>${item.active ? 'Active' : 'Inactive'}</td><td>${item.hasSignature ? 'Saved' : 'None'}</td>
-              <td>${item.hasSignature ? `<button class="secondary" onclick="resetSig('${escapeHtml(item.email)}')">Reset</button>` : ''}</td></tr>`).join('');
+              <td class="actions" style="margin:0"><button class="secondary" type="button" onclick="editApprover('${escapeHtml(item.email)}')">Edit</button>
+                ${item.hasSignature ? `<button class="secondary" type="button" onclick="resetSig('${escapeHtml(item.email)}')">Reset signature</button>` : ''}
+                <button class="reject" type="button" onclick="deleteApprover('${escapeHtml(item.email)}')">Delete</button></td></tr>`).join('');
           window.adminApprovers = data.approvers;
           renderRules(data.routing);
         }).catch(error => showError($('#adminMessage'), error));
@@ -391,6 +393,32 @@
           const [min, a1, a2, active] = row.querySelectorAll('input, select');
           return { min: Number(min.value), approver1: a1.value, approver2: a2.value, active: active.checked };
         });
+      }
+      function editApprover(email) {
+        const item = window.adminApprovers.find(entry => entry.email === email);
+        if (!item) return;
+        const form = $('#approverForm');
+        form.elements.name.value = item.name;
+        form.elements.email.value = item.email;
+        form.elements.email.readOnly = true;
+        form.elements.title.value = item.title || '';
+        form.elements.active.value = String(item.active);
+        $('#approverSubmit').textContent = 'Save changes';
+        $('#approverCancel').hidden = false;
+        form.scrollIntoView({ behavior: 'smooth' });
+      }
+      function resetApproverForm() {
+        const form = $('#approverForm');
+        form.reset();
+        form.elements.email.readOnly = false;
+        $('#approverSubmit').textContent = 'Add approver';
+        $('#approverCancel').hidden = true;
+      }
+      function deleteApprover(email) {
+        if (confirm(`Delete approver ${email}? Their saved signature is removed. This cannot be undone.`)) {
+          run('deleteApprover', email).then(() => { showOk($('#adminMessage'), 'Approver deleted.'); loadAdmin(); refreshSetup(); })
+            .catch(error => showError($('#adminMessage'), error));
+        }
       }
       function resetSig(email) {
         if (confirm(`Reset the saved signature for ${email}? They must draw a new one before approving.`)) {
@@ -413,7 +441,7 @@
         const form = event.currentTarget;
         const input = Object.fromEntries(new FormData(form).entries());
         input.active = input.active === 'true';
-        run('saveApprover', input).then(() => { form.reset(); showOk($('#adminMessage'), 'Approver saved.'); loadAdmin(); refreshSetup(); })
+        run('saveApprover', input).then(() => { resetApproverForm(); showOk($('#adminMessage'), 'Approver saved.'); loadAdmin(); refreshSetup(); })
           .catch(error => showError($('#adminMessage'), error));
       });
       $('#scheduleReminders').addEventListener('click', () => {
