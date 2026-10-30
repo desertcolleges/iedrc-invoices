@@ -169,13 +169,13 @@
         </article>`;
       }
       function showTab(name) {
-        document.querySelectorAll('[data-tab]').forEach(section => section.classList.toggle('inactive', section.dataset.tab !== name));
+        document.querySelectorAll('section[data-tab]').forEach(section => section.classList.toggle('inactive', section.dataset.tab !== name));
         document.querySelectorAll('#tabs button').forEach(button => button.setAttribute('aria-selected', String(button.dataset.tab === name)));
         activeTab = name;
         if (name === 'view' && !$('#searchResults').dataset.loaded) searchInvoices();
       }
       function renderTabs() {
-        const visible = [...document.querySelectorAll('[data-tab]')].filter(section => !section.hidden);
+        const visible = [...document.querySelectorAll('section[data-tab]')].filter(section => !section.hidden);
         $('#tabs').innerHTML = visible.map(section =>
           `<button type="button" role="tab" data-tab="${section.dataset.tab}">${section.dataset.label}</button>`).join('');
         $('#tabs').querySelectorAll('button').forEach(button => button.addEventListener('click', () => showTab(button.dataset.tab)));
