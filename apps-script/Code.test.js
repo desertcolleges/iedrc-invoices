@@ -76,3 +76,23 @@ test('reminderAction_ reminds on schedule and escalates once', () => {
   assert.equal(action({}, 6, { ...settings, ESCALATION_EMAIL: '' }), 'remind');
   assert.equal(action({}, 9, { ...settings, REMINDER_DAYS: '0', ESCALATION_DAYS: '0' }), '');
 });
+
+test('statusGroup_ buckets statuses for filtering', () => {
+  assert.equal(call("statusGroup_('Pending Approver 2')"), 'pending');
+  assert.equal(call("statusGroup_('Needs Revision')"), 'revision');
+  assert.equal(call("statusGroup_('Filed')"), 'filed');
+  assert.equal(call("statusGroup_('Withdrawn')"), 'withdrawn');
+  assert.equal(call("statusGroup_('Processing final PDF')"), 'processing');
+});
+
+test('csvCell_ quotes values and neutralizes spreadsheet formulas', () => {
+  assert.equal(call('csvCell_(\'Acme, Inc\')'), '"Acme, Inc"');
+  assert.equal(call('csvCell_(\'=HYPERLINK("x")\')'), '"\'=HYPERLINK(""x"")"');
+  assert.equal(call('csvCell_(12.5)'), '12.5');
+});
+
+test('iso_ and toMs_ handle Date objects and strings', () => {
+  assert.equal(call("iso_(new Date('2026-01-02T03:04:05Z'))"), '2026-01-02T03:04:05.000Z');
+  assert.equal(call("toMs_('2026-01-02T03:04:05.000Z')"), Date.parse('2026-01-02T03:04:05.000Z'));
+  assert.equal(call("toMs_('')"), 0);
+});

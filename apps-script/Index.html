@@ -32,6 +32,11 @@
       nav button { background: #e5e7eb; color: #1f2937; }
       nav button[aria-selected=true] { background: #155e8a; color: white; }
       .inactive { display: none; }
+      .chip { background: #e5e7eb; color: #1f2937; border-radius: 999px; padding: .3rem .8rem; font-size: .85rem; }
+      .chip[aria-pressed=true] { background: #155e8a; color: #fff; }
+      .rejection { background: #fef2f2; border-left: 4px solid #a12b2b; padding: .5rem .7rem; margin: .5rem 0; font-size: .9rem; white-space: pre-wrap; }
+      .invoice.highlight { outline: 3px solid #155e8a; }
+      .history { font-size: .85rem; margin: .5rem 0 0; padding-left: 1.1rem; }
       #viewer:not([hidden]) { display: flex; }
       #busy { position: fixed; inset: 0 0 auto 0; z-index: 10; background: #155e8a; color: #fff; padding: .6rem 1rem; text-align: center; box-shadow: 0 2px 6px #0004; }
       #busy::before { content: ''; display: inline-block; width: .9em; height: .9em; margin-right: .6em; vertical-align: -.1em; border: 2px solid #fff6; border-top-color: #fff; border-radius: 50%; animation: spin .8s linear infinite; }
@@ -65,8 +70,9 @@
       <section data-tab="submit" data-label="Submit invoice">
         <h2>Submit an invoice</h2>
         <form id="submission">
-          <label>Vendor<input name="vendor" required maxlength="200"></label>
-          <label>PO number<input name="po" required maxlength="100"></label>
+          <label>Vendor<input name="vendor" required maxlength="200" list="vendorList" autocomplete="off"></label>
+          <datalist id="vendorList"></datalist><datalist id="poList"></datalist>
+          <label>PO number<input name="po" required maxlength="100" list="poList" autocomplete="off"></label>
           <label>Invoice number<input name="invoiceNo" required maxlength="100"></label>
           <label>Invoice date<input name="invoiceDate" type="date" required></label>
           <label>Amount<input name="amount" type="number" min="0" step="0.01" required></label>
@@ -121,15 +127,20 @@
       </section>
       <section data-tab="mine" data-label="My invoices &amp; approvals">
         <h2>My invoices and approvals</h2>
+        <div id="invoiceFilters" class="actions" style="flex-wrap:wrap;margin:0 0 .8rem"></div>
         <div id="invoices" class="muted">Loading…</div>
       </section>
       <section data-tab="view" data-label="View invoices">
         <h2>View invoices</h2>
         <p class="muted">Search all submitted invoices by vendor, PO, invoice number, status or submitter.</p>
-        <form id="searchForm" style="grid-template-columns:1fr auto">
-          <input id="searchQuery" type="search" placeholder="Search invoices" aria-label="Search all invoices">
-          <button type="submit">Search</button>
+        <form id="searchForm">
+          <label class="full">Search<input id="searchQuery" type="search" placeholder="Vendor, PO, invoice number…"></label>
+          <label>Status<select id="searchStatus"><option value="">Any</option><option value="pending">Awaiting approval</option><option value="revision">Needs revision</option><option value="processing">Processing</option><option value="filed">Filed</option><option value="withdrawn">Withdrawn</option></select></label>
+          <label>Invoice date from<input id="searchFrom" type="date"></label>
+          <label>Invoice date to<input id="searchTo" type="date"></label>
+          <div class="full actions"><button type="submit">Search</button><button type="button" class="secondary" id="exportCsv">Export CSV</button></div>
         </form>
+        <p id="searchSummary" class="muted"></p>
         <div id="searchResults" class="muted"></div>
       </section>
     </main>
@@ -138,6 +149,7 @@
       let revisionId = '';
       let setup = null;
       let activeTab = 'submit';
+      let vendors = [];
       const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char =>
         ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
       const money = value => '$' + Number(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -147,10 +159,12 @@
         $('#busy').hidden = pending <= 0;
         if (text) $('#busy').textContent = text;
       };
-      const run = (name, ...args) => new Promise((resolve, reject) => {
-        setBusy(1, name === 'submitInvoice' || name === 'resubmitInvoice' ? 'Submitting invoice and building the review package… this can take several seconds.'
+      const run = (name, ...args) => call(name, args, false);
+      const runQuiet = (name, ...args) => call(name, args, true);
+      const call = (name, args, quiet) => new Promise((resolve, reject) => {
+        if (!quiet) setBusy(1, name === 'submitInvoice' || name === 'resubmitInvoice' ? 'Submitting invoice…'
           : name === 'rebuildPackage' ? 'Rebuilding package…' : name === 'decideInvoice' ? 'Recording your decision…' : 'Working…');
-        const done = fn => value => { setBusy(-1); fn(value); };
+        const done = fn => value => { if (!quiet) setBusy(-1); fn(value); };
         resolve = done(resolve);
         reject = done(reject);
         const runner = google.script.run.withSuccessHandler(resolve).withFailureHandler(reject);
@@ -170,9 +184,10 @@
 
       function invoiceCard(invoice) {
         const id = escapeHtml(invoice.id);
-        return `<article class="invoice">
+        return `<article class="invoice" data-invoice-id="${id}">
           <strong>${escapeHtml(invoice.vendor)} — ${escapeHtml(invoice.invoiceNo)}</strong>
-          <div>${escapeHtml(invoice.status)}</div>
+          <div>${escapeHtml(invoice.status)}${invoice.building ? ' <span class="muted">— working on it…</span>' : ''}</div>
+          ${invoice.rejectionNote || invoice.rejectedBy ? `<div class="rejection"><strong>Returned by ${escapeHtml(invoice.rejectedBy)}:</strong> ${escapeHtml(invoice.rejectionNote)}</div>` : ''}
           <div class="details">
             <div><span>Amount</span>${money(invoice.amount)}</div>
             <div><span>PO</span>${escapeHtml(invoice.po)}</div>
@@ -181,8 +196,10 @@
             ${invoice.notes ? `<div><span>Notes</span>${escapeHtml(invoice.notes)}</div>` : ''}
           </div>
           ${invoice.hasPackage ? `<div class="actions"><button class="secondary" onclick="openPackage('${id}', this)">View package</button></div>` : ''}
-          ${invoice.awaitingPackage ? '<p class="muted">The review package is still being prepared. Ask the submitter to rebuild it if this persists.</p>' : ''}
+          ${invoice.awaitingPackage && invoice.building ? '<p class="muted">The review package is being prepared. This page updates automatically.</p>' : ''}
+          ${invoice.awaitingPackage && !invoice.building ? '<p class="error">The review package could not be built. The submitter or an admin can rebuild it.</p>' : ''}
           ${invoice.canRebuild ? `<div class="actions"><button class="secondary" onclick="rebuild('${id}')">Rebuild package</button></div>` : ''}
+          ${invoice.canWithdraw ? `<div class="actions"><button class="secondary" onclick="withdraw('${id}')">Withdraw</button></div>` : ''}
           ${invoice.canRevise ? `<div class="actions"><button class="secondary" onclick="startRevision('${id}')">Revise and resubmit</button></div>` : ''}
           ${invoice.canApprove ? `<div class="actions">
             <input id="note-${id}" aria-label="Approval note" placeholder="Note or rejection reason">
@@ -190,6 +207,8 @@
             <button class="reject" onclick="decide('${id}','reject')">Reject</button>
           </div>` : ''}
           ${invoice.canDelete ? `<div class="actions"><button class="reject" onclick="removeInvoice('${id}')">Delete record</button></div>` : ''}
+          <div class="actions"><button class="secondary" onclick="toggleHistory('${id}', this)">History</button></div>
+          <div id="history-${id}"></div>
           ${invoice.canRetry ? `<div class="actions"><button class="secondary" onclick="retry('${id}')">Retry finalization</button></div>` : ''}
         </article>`;
       }
@@ -219,27 +238,102 @@
           ${item.canView ? `<div class="actions"><button class="secondary" onclick="openPackage('${escapeHtml(item.id)}', this)">View package</button></div>` : ''}
         </article>`;
       }
+      function searchFilters() {
+        return { query: $('#searchQuery').value, status: $('#searchStatus').value, from: $('#searchFrom').value, to: $('#searchTo').value };
+      }
       function searchInvoices() {
         const target = $('#searchResults');
         target.dataset.loaded = '1';
         target.className = 'muted';
         target.textContent = 'Searching…';
-        run('searchInvoices', $('#searchQuery').value).then(data => {
+        run('searchInvoices', searchFilters()).then(result => {
           target.className = '';
-          target.innerHTML = data.length ? data.map(searchCard).join('') : '<p>No matching invoices.</p>';
+          target.innerHTML = result.items.length ? result.items.map(searchCard).join('') : '<p>No matching invoices.</p>';
+          $('#searchSummary').textContent = result.total > result.items.length
+            ? `Showing the newest ${result.items.length} of ${result.total} matches. Narrow the search or export all as CSV.`
+            : `${result.total} matching invoice${result.total === 1 ? '' : 's'}.`;
         }).catch(error => showError(target, error));
       }
+      $('#exportCsv').addEventListener('click', () => {
+        run('exportInvoicesCsv', searchFilters()).then(file => {
+          const url = URL.createObjectURL(new Blob([file.csv], { type: 'text/csv' }));
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = file.name;
+          link.click();
+          setTimeout(() => URL.revokeObjectURL(url), 60000);
+        }).catch(error => showError($('#searchResults'), error));
+      });
       $('#searchForm').addEventListener('submit', event => { event.preventDefault(); searchInvoices(); });
+      let invoiceFilter = null;
+      let pollTimer = null;
+      let pollCount = 0;
+      let deepLinkId = '';
+      const FILTERS = [
+        ['awaiting', 'Awaiting my approval', item => item.awaitingMe],
+        ['revision', 'Needs revision', item => item.group === 'revision'],
+        ['pending', 'In progress', item => item.group === 'pending' || item.group === 'processing'],
+        ['filed', 'Filed', item => item.group === 'filed'],
+        ['withdrawn', 'Withdrawn', item => item.group === 'withdrawn'],
+        ['all', 'All', () => true],
+      ];
       function renderInvoices() {
-        const data = window.invoiceData || [];
+        const all = window.invoiceData || [];
+        const awaiting = all.filter(item => item.awaitingMe).length;
+        if (invoiceFilter === null) invoiceFilter = awaiting ? 'awaiting' : 'all';
+        $('#invoiceFilters').innerHTML = FILTERS.map(([key, label, test]) => {
+          const count = all.filter(test).length;
+          return `<button type="button" class="chip" data-filter="${key}" aria-pressed="${invoiceFilter === key}">${label} (${count})</button>`;
+        }).join('');
+        $('#invoiceFilters').querySelectorAll('button').forEach(button => button.addEventListener('click', () => {
+          invoiceFilter = button.dataset.filter;
+          renderInvoices();
+        }));
+        const tab = $('#tabs button[data-tab=mine]');
+        if (tab) tab.textContent = awaiting ? `My invoices & approvals (${awaiting})` : 'My invoices & approvals';
+        const test = FILTERS.find(entry => entry[0] === invoiceFilter)[2];
+        const data = all.filter(test);
         $('#invoices').className = '';
         $('#invoices').innerHTML = data.length ? data.map(invoiceCard).join('') : '<p>No invoices to show.</p>';
+        if (deepLinkId) focusInvoice(deepLinkId);
+        clearTimeout(pollTimer);
+        if (all.some(item => item.building) && pollCount < 40) {
+          pollCount += 1;
+          pollTimer = setTimeout(() => runQuiet('getDashboard').then(data => { window.invoiceData = data; renderInvoices(); }).catch(() => {}), 4000);
+        } else if (!all.some(item => item.building)) {
+          pollCount = 0;
+        }
+      }
+      function focusInvoice(id) {
+        const all = window.invoiceData || [];
+        const item = all.find(entry => entry.id === id);
+        if (!item) return;
+        deepLinkId = '';
+        if (!FILTERS.find(entry => entry[0] === invoiceFilter)[2](item)) { invoiceFilter = 'all'; renderInvoices(); }
+        showTab('mine');
+        const card = $('#invoices').querySelector(`[data-invoice-id="${CSS.escape(id)}"]`);
+        if (card) { card.classList.add('highlight'); card.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
       }
       function refresh() {
+        pollCount = 0;
         run('getDashboard').then(data => {
           window.invoiceData = data;
           renderInvoices();
         }).catch(error => showError($('#invoices'), error));
+      }
+      function withdraw(id) {
+        const invoice = window.invoiceData.find(item => item.id === id);
+        if (!invoice || !confirm(`Withdraw ${invoice.vendor} — ${invoice.invoiceNo}? Approvers will no longer be asked to approve it. You can revise and resubmit it later.`)) return;
+        run('withdrawInvoice', id).then(refresh).catch(reportFailure);
+      }
+      function toggleHistory(id, button) {
+        const box = document.getElementById(`history-${id}`);
+        if (box.innerHTML) { box.innerHTML = ''; return; }
+        button.disabled = true;
+        run('getHistory', id).then(rows => {
+          box.innerHTML = `<ul class="history">${rows.map(row =>
+            `<li><strong>${escapeHtml(row.action)}</strong> — ${escapeHtml(new Date(row.time).toLocaleString())} — ${escapeHtml(row.actor)}${row.detail ? `<br><span class="muted">${escapeHtml(row.detail)}</span>` : ''}</li>`).join('') || '<li>No history.</li>'}</ul>`;
+        }).catch(error => showError(box, error)).then(() => { button.disabled = false; });
       }
       const PDFJS_BASE = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/';
       let pdfjsReady = null;
@@ -357,6 +451,22 @@
         selects[0].value = defaultApprover;
       }
 
+      function renderVendors() {
+        $('#vendorList').innerHTML = vendors.map(item => `<option value="${escapeHtml(item.name)}"></option>`).join('');
+      }
+      function applyVendor() {
+        if (revisionId) return;
+        const form = $('#submission');
+        const hint = vendors.find(item => item.name.toLowerCase() === form.elements.vendor.value.trim().toLowerCase());
+        $('#poList').innerHTML = hint ? hint.pos.map(po => `<option value="${escapeHtml(po)}"></option>`).join('') : '';
+        if (!hint) return;
+        if (!form.elements.po.value && hint.pos[0]) form.elements.po.value = hint.pos[0];
+        [['approver1', hint.approver1], ['approver2', hint.approver2]].forEach(([field, email]) => {
+          const select = form.elements[field];
+          if ([...select.options].some(option => option.value === email.toLowerCase())) select.value = email.toLowerCase();
+        });
+        applyRouting();
+      }
       function loadApp() {
         run('getBootstrap').then(boot => {
           const info = boot.setup;
@@ -374,6 +484,8 @@
           if (!ready) return;
           fillApproverSelects(info.approvers, info.defaultApprover);
           $('#fileHint').textContent = `PDF up to ${info.maxUploadMb} MB.`;
+          vendors = boot.vendors || [];
+          renderVendors();
           window.invoiceData = boot.dashboard;
           renderInvoices();
           if (info.isApprover) applySignature(boot.signature);
@@ -529,7 +641,13 @@
         }).catch(error => showError($('#appError'), error));
       }
 
-      window.addEventListener('load', loadApp);
+      window.addEventListener('load', () => {
+        if (google.script.url && google.script.url.getLocation) {
+          google.script.url.getLocation(location => { deepLinkId = (location.parameter && location.parameter.invoice) || ''; loadApp(); });
+        } else {
+          loadApp();
+        }
+      });
       document.addEventListener('keydown', event => { if (event.key === 'Escape') closeViewer(); });
       $('#initialize').addEventListener('click', () => {
         const button = $('#initialize');
@@ -540,6 +658,7 @@
         });
       });
       $('#submission').elements.amount.addEventListener('change', applyRouting);
+      $('#submission').elements.vendor.addEventListener('change', applyVendor);
       $('#submission').addEventListener('submit', async event => {
         event.preventDefault();
         const form = event.currentTarget;
@@ -569,9 +688,17 @@
             input.confirmDuplicate = true;
             result = await run(method, input);
           }
+          const known = vendors.find(item => item.name.toLowerCase() === String(input.vendor).trim().toLowerCase());
+          if (known) {
+            known.pos = [input.po, ...known.pos.filter(po => po !== input.po)].slice(0, 8);
+            known.approver1 = input.approver1 || '';
+            known.approver2 = input.approver2 || '';
+          } else {
+            vendors.push({ name: String(input.vendor).trim(), pos: [input.po], approver1: input.approver1 || '', approver2: input.approver2 || '' });
+            renderVendors();
+          }
           resetForm();
-          if (result.packageReady) showOk(message, 'Invoice submitted. The approver has been notified.');
-          else showError(message, new Error('Invoice saved, but the review package could not be built. Use "Rebuild package" below.'));
+          showOk(message, 'Invoice submitted. The review package is being prepared and the approver is emailed when it is ready.');
           refresh();
         } catch (error) {
           showError(message, error);

@@ -63,7 +63,7 @@ The web app runs as its owner and identifies each user with `Session.getActiveUs
 Requires Node.js 20 or newer.
 
 ```sh
-node --test apps-script/Code.test.js
+node --test apps-script/
 cd pdf-service
 npm ci
 npm test
@@ -78,5 +78,9 @@ The service requires the `PDF_SERVICE_TOKEN` environment variable and checks the
 - Approvals are sequential; the second approver is optional.
 - A rejected invoice can be revised and resubmitted as a new version. Superseded invoice and package files are deleted; the Audit sheet keeps the history.
 - Admins can retry finalization; submitters or admins can rebuild a failed review package.
+- Package builds and filing run in the background (a one-off `processQueue` trigger), so submitting and approving return immediately and the page updates itself. Admins can run `processQueue` from the editor if work is ever stuck.
+- Submitters or admins can withdraw an invoice; a withdrawn invoice can be revised and resubmitted. Each invoice card has a History timeline (error details are admin-only).
+- Emails link directly to the invoice (`?invoice=ID`). The invoices tab has an "Awaiting my approval" view, and approvers see the rejection reason on returned invoices.
+- **View invoices** supports status and date filters and CSV export. The submit form remembers vendors, their recent POs and last-used approvers.
 - Reminders, escalation, duplicate detection, amount-based approver routing, and approver/signature management are configured in **Admin settings**.
 - Not included: external e-signature integration (Adobe Sign API access was unavailable), OCR, and approver delegation.
