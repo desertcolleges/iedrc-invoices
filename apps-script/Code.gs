@@ -706,6 +706,11 @@ function requireAdmin_() {
   return { user, db };
 }
 
+// Informational only; never let a quota lookup break the admin screen.
+function mailQuota_() {
+  try { return MailApp.getRemainingDailyQuota(); } catch (error) { return 'unknown'; }
+}
+
 function getAdminData() {
   const { db } = requireAdmin_();
   const settings = getSettings_(db);
@@ -720,7 +725,7 @@ function getAdminData() {
       active: String(row.Active).toLowerCase() === 'true',
     })),
     remindersScheduled: ScriptApp.getProjectTriggers().some(trigger => trigger.getHandlerFunction() === 'sendReminders'),
-    mailQuotaRemaining: MailApp.getRemainingDailyQuota(),
+    mailQuotaRemaining: mailQuota_(),
   };
 }
 
