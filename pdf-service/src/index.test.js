@@ -80,3 +80,12 @@ test('package endpoint requires its service token', async () => {
   const response = await fetch(endpoint.replace('/merge', '/package'), { method: 'POST', body: '{}', headers: { 'Content-Type': 'application/json' } });
   assert.equal(response.status, 401);
 });
+
+test('topsheet renders a legacy typed signature', async () => {
+  const { buildTopsheet } = require('./topsheet');
+  const bytes = await buildTopsheet({
+    vendor: 'Acme', po: '1', invoiceNo: '2', invoiceDate: '2026-01-01', amount: '$1.00',
+    approvals: [{ order: 1, name: 'Jane Doe', signatureText: 'Jane Doe', date: 'Jan 1, 2026' }],
+  });
+  assert.ok(Buffer.from(bytes).subarray(0, 5).toString() === '%PDF-');
+});

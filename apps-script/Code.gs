@@ -404,7 +404,7 @@ function rebuildPackage(id) {
     Number(row.Version) === Number(invoice.Version) && row.Decision === 'Pending');
   const ready = preparePackage_(db, invoice, user.email, pending ? pending.ApproverEmail : '',
     `Invoice ${invoice.InvoiceNo} from ${invoice.Vendor} (${formatAmount_(invoice.Amount)}) is ready for your review.`);
-  if (!ready) throw new Error('The package could not be built. See the Audit sheet for details.');
+  if (!ready) throw new Error(`The package could not be built: ${lastPackageError_ || 'unknown error'}. See the Audit sheet for details.`);
   return { ok: true };
 }
 
@@ -495,6 +495,7 @@ function retryFinalization(id) {
 }
 
 // Builds the review package (topsheet with payment details + invoice) and optionally notifies an approver.
+let lastPackageError_ = '';
 function preparePackage_(db, invoice, actor, notifyEmail, notice) {
   try {
     const blob = buildPackage_(db, invoice);
@@ -502,8 +503,9 @@ function preparePackage_(db, invoice, actor, notifyEmail, notice) {
     updateInvoice_(db.getSheetByName(SHEETS.invoices), invoice, { PackageFileId: file.getId(), PackageStatus: 'Ready' });
     audit_(db, invoice.ID, actor, 'Package built', { version: Number(invoice.Version), fileId: file.getId() });
   } catch (error) {
+    lastPackageError_ = String(error.message || error);
     updateInvoice_(db.getSheetByName(SHEETS.invoices), invoice, { PackageStatus: 'Failed' });
-    audit_(db, invoice.ID, actor, 'Package build failed', { message: String(error.message || error) });
+    audit_(db, invoice.ID, actor, 'Package build failed', { message: lastPackageError_ });
     sendNotice_(invoice.SubmitterEmail, 'Invoice package could not be built',
       `The review package for invoice ${invoice.InvoiceNo} could not be built. Open the app and choose "Rebuild package".`);
     return false;
@@ -526,9 +528,17 @@ function buildPackage_(db, invoice) {
       title: person ? person.Title : '',
     };
     if (row.Decision === 'Signed') {
-      const fileId = String(row.Signature).replace(/^file:/, '');
-      if (!fileId) throw new Error(`Missing stored signature for approver ${row.Order}.`);
-      entry.signature = Utilities.base64Encode(DriveApp.getFileById(fileId).getBlob().getBytes());
+      const stored = String(row.Signature || '').trim();
+      // Invoices signed before saved signatures stored a typed name instead of a Drive file reference.
+      if (stored.startsWith('file:')) {
+        try {
+          entry.signature = Utilities.base64Encode(DriveApp.getFileById(stored.slice(5)).getBlob().getBytes());
+        } catch (error) {
+          entry.signatureText = entry.name;
+        }
+      } else {
+        entry.signatureText = stored || entry.name;
+      }
       entry.date = Utilities.formatDate(new Date(row.SignedAt), Session.getScriptTimeZone(), 'MMM d, yyyy h:mm a');
       entry.note = row.Note;
     }
