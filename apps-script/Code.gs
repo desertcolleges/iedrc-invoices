@@ -297,9 +297,7 @@ function resolveApprovers_(db, user, input, settings) {
   if (!approvers.includes(approver1) || (approver2 && !approvers.includes(approver2))) {
     throw new Error('Select active approvers from the list.');
   }
-  if (approver1 === approver2 || approver1 === user.email || approver2 === user.email) {
-    throw new Error('You cannot approve your own invoice or select the same approver twice.');
-  }
+  if (approver2 && approver1 === approver2) throw new Error('Select two different approvers.');
   return { approver1, approver2 };
 }
 

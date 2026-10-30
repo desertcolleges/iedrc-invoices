@@ -32,10 +32,14 @@
       nav button { background: #e5e7eb; color: #1f2937; }
       nav button[aria-selected=true] { background: #155e8a; color: white; }
       .inactive { display: none; }
+      #busy { position: fixed; inset: 0 0 auto 0; z-index: 10; background: #155e8a; color: #fff; padding: .6rem 1rem; text-align: center; box-shadow: 0 2px 6px #0004; }
+      #busy::before { content: ''; display: inline-block; width: .9em; height: .9em; margin-right: .6em; vertical-align: -.1em; border: 2px solid #fff6; border-top-color: #fff; border-radius: 50%; animation: spin .8s linear infinite; }
+      @keyframes spin { to { transform: rotate(360deg); } }
       @media (max-width: 600px) { form { grid-template-columns: 1fr; } label.full { grid-column: auto; } }
     </style>
   </head>
   <body>
+    <div id="busy" role="status" hidden>Working…</div>
     <header><strong>IEDRC Invoice Approval</strong><span id="identity" style="float:right"></span></header>
     <main id="app">
       <p id="appError" class="error" role="alert"></p>
@@ -128,7 +132,18 @@
       const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char =>
         ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
       const money = value => '$' + Number(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      let pending = 0;
+      const setBusy = (delta, text) => {
+        pending += delta;
+        $('#busy').hidden = pending <= 0;
+        if (text) $('#busy').textContent = text;
+      };
       const run = (name, ...args) => new Promise((resolve, reject) => {
+        setBusy(1, name === 'submitInvoice' || name === 'resubmitInvoice' ? 'Submitting invoice and building the review package… this can take several seconds.'
+          : name === 'rebuildPackage' ? 'Rebuilding package…' : name === 'decideInvoice' ? 'Recording your decision…' : 'Working…');
+        const done = fn => value => { setBusy(-1); fn(value); };
+        resolve = done(resolve);
+        reject = done(reject);
         const runner = google.script.run.withSuccessHandler(resolve).withFailureHandler(reject);
         if (typeof runner[name] !== 'function') {
           return reject(new Error(`The server does not provide "${name}". Redeploy Code.gs and Index.html together as a new web app version.`));
@@ -472,6 +487,7 @@
         const message = $('#formMessage');
         message.textContent = '';
         button.disabled = true;
+        button.textContent = 'Submitting…';
         try {
           const file = form.elements.file.files[0];
           const input = Object.fromEntries(new FormData(form).entries());
@@ -501,6 +517,7 @@
           showError(message, error);
         }
         button.disabled = false;
+        button.textContent = revisionId ? 'Resubmit invoice' : 'Submit invoice';
       });
       $('#cancelRevision').addEventListener('click', cancelRevision);
     </script>
