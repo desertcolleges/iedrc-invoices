@@ -594,17 +594,23 @@ function buildPackage_(db, invoice) {
     return entry;
   });
   const original = DriveApp.getFileById(invoice.OriginalFileId).getBlob();
-  const response = UrlFetchApp.fetch(config.pdfServiceUrl.replace(/\/merge\/?$/, '/package'), {
+  const topsheetData = {
+    vendor: invoice.Vendor, po: invoice.PO, invoiceNo: invoice.InvoiceNo,
+    invoiceDate: String(plain_(invoice.InvoiceDate)), amount: formatAmount_(invoice.Amount),
+    notes: invoice.Notes, submitter: invoice.SubmitterEmail, approvals,
+  };
+  // The Docs template is used whenever TEMPLATE_DOC_ID is set; otherwise the service draws a plain topsheet.
+  const templated = config.templateDocId ? renderTemplateTopsheet_(config.templateDocId, topsheetData, invoice) : null;
+  const response = UrlFetchApp.fetch(config.pdfServiceUrl.replace(/\/merge\/?$/, templated ? '/merge' : '/package'), {
     method: 'post',
     contentType: 'application/json',
     headers: { 'X-Service-Token': config.pdfServiceToken },
-    payload: JSON.stringify({
+    payload: JSON.stringify(templated ? {
+      topsheet: Utilities.base64Encode(templated.getBytes()),
       invoice: Utilities.base64Encode(original.getBytes()),
-      topsheet: {
-        vendor: invoice.Vendor, po: invoice.PO, invoiceNo: invoice.InvoiceNo,
-        invoiceDate: String(plain_(invoice.InvoiceDate)), amount: formatAmount_(invoice.Amount),
-        notes: invoice.Notes, submitter: invoice.SubmitterEmail, approvals,
-      },
+    } : {
+      invoice: Utilities.base64Encode(original.getBytes()),
+      topsheet: topsheetData,
     }),
     muteHttpExceptions: true,
   });
@@ -614,6 +620,46 @@ function buildPackage_(db, invoice) {
   const result = JSON.parse(response.getContentText());
   if (!result.pdf) throw new Error('PDF service returned no PDF.');
   return Utilities.newBlob(Utilities.base64Decode(result.pdf), MimeType.PDF, 'package.pdf');
+}
+
+// Copies the Docs template, fills {{PLACEHOLDERS}} (signatures as images), and returns it as a PDF blob.
+function renderTemplateTopsheet_(templateId, data, invoice) {
+  const config = getConfig_();
+  const copy = DriveApp.getFileById(templateId).makeCopy(`Topsheet ${invoice.ID}`, DriveApp.getFolderById(config.workingFolderId));
+  try {
+    const doc = DocumentApp.openById(copy.getId());
+    const body = doc.getBody();
+    const values = {
+      VENDOR: data.vendor, PO: data.po, INVOICE_NO: data.invoiceNo, INVOICE_DATE: data.invoiceDate,
+      AMOUNT: data.amount, NOTES: data.notes, SUBMITTER: data.submitter,
+    };
+    for (let order = 1; order <= 2; order++) {
+      const entry = data.approvals.find(item => item.order === order) || {};
+      values[`APPROVER${order}_NAME`] = entry.name || '';
+      values[`APPROVER${order}_TITLE`] = entry.title || '';
+      values[`APPROVER${order}_DATE`] = entry.date || '';
+      values[`APPROVER${order}_NOTES`] = entry.note || '';
+      // Drawn signatures are inserted as images below, so keep their placeholder.
+      if (!entry.signature) values[`APPROVER${order}_SIG`] = entry.signatureText || '';
+    }
+    Object.keys(values).forEach(key => {
+      body.replaceText(`\\{\\{${key}\\}\\}`, String(values[key] || '').replace(/\$/g, '\\$'));
+    });
+    data.approvals.filter(entry => entry.signature).forEach(entry => {
+      const found = body.findText(`\\{\\{APPROVER${entry.order}_SIG\\}\\}`);
+      if (!found) return;
+      const text = found.getElement().asText();
+      text.deleteText(found.getStartOffset(), found.getEndOffsetInclusive());
+      const image = text.getParent().asParagraph().appendInlineImage(
+        Utilities.newBlob(Utilities.base64Decode(entry.signature), 'image/png', 'signature.png'));
+      const scale = Math.min(180 / image.getWidth(), 50 / image.getHeight(), 1);
+      image.setWidth(Math.round(image.getWidth() * scale)).setHeight(Math.round(image.getHeight() * scale));
+    });
+    doc.saveAndClose();
+    return DriveApp.getFileById(copy.getId()).getAs(MimeType.PDF);
+  } finally {
+    trashFile_(copy.getId());
+  }
 }
 
 function savePackage_(invoice, blob) {
@@ -931,7 +977,8 @@ function getConfig_() {
     pdfServiceUrl: props.getProperty('PDF_SERVICE_URL'),
     pdfServiceToken: props.getProperty('PDF_SERVICE_TOKEN'),
   };
-  const missing = Object.keys(config).filter(key => !config[key]);
+  config.templateDocId = props.getProperty('TEMPLATE_DOC_ID') || '';
+  const missing = Object.keys(config).filter(key => key !== 'templateDocId' && !config[key]);
   if (missing.length) throw new Error(`Configure required Script Properties: ${missing.join(', ')}.`);
   return config;
 }
