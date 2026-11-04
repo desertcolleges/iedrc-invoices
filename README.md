@@ -36,7 +36,7 @@ The review package (topsheet with payment details + invoice PDF) is built when a
    ```
 
    Grant the Cloud Run runtime service account Secret Manager access to `iedrc-pdf-service-token`. The service is publicly reachable because Apps Script cannot obtain the Google ID token a private Cloud Run service requires; every request must carry the secret `X-Service-Token`, so keep that token private and rotate it if exposed. Copy its service URL and append `/merge` for `PDF_SERVICE_URL`.
-5. Create an Apps Script project, add `apps-script/Code.gs` and `apps-script/Index.html`, and set the project manifest from `apps-script/appsscript.json`. Set the following **Script Properties** (IDs are the strings from each Google URL):
+5. Create an Apps Script project, add `apps-script/Code.gs`, `apps-script/Index.html`, and `apps-script/Brand.html` (HTML files named `Index` and `Brand`), and set the project manifest from `apps-script/appsscript.json`. Set the following **Script Properties** (IDs are the strings from each Google URL):
 
    | Property | Value |
    |---|---|
@@ -54,9 +54,25 @@ The review package (topsheet with payment details + invoice PDF) is built when a
 7. Deploy the Apps Script as a **Web app**, executing as **you (the deployer/owner)**, with access limited to your Workspace domain. The owner account runs Drive, Sheets, Docs, Gmail, and Cloud Run calls; app users do not need direct access to those resources.
 8. Sign in to the deployed app with an address listed in `ADMIN_EMAILS` and select **Initialize / upgrade sheets** (safe to re-run; it adds new tabs and columns without touching data). Add approvers in **Admin settings**, ask each approver to save a signature, and select **Enable daily reminders**. The reminder trigger runs as the admin who enables it, so use the owner/shared account.
 
-Upgrading an existing deployment: redeploy `Code.gs`, `Index.html`, and `appsscript.json` (a new `script.scriptapp` scope needs re-authorization), redeploy the PDF service, then run **Initialize / upgrade sheets**. Set `TEMPLATE_DOC_ID` to your topsheet Google Doc to use it for the topsheet (see below); without it the PDF service draws a plain topsheet.
+Upgrading an existing deployment: redeploy `Code.gs`, `Index.html`, `Brand.html`, and `appsscript.json` (a new `script.scriptapp` scope needs re-authorization), redeploy the PDF service, then run **Initialize / upgrade sheets**. Set `TEMPLATE_DOC_ID` to your topsheet Google Doc to use it for the topsheet (see below); without it the PDF service draws a plain topsheet.
 
 The web app runs as its owner and identifies each user with `Session.getActiveUser()`, which Google supplies for users in the owner's Workspace domain. The server rejects anyone outside `ALLOWED_DOMAIN` on every request. Keep the Apps Script project editor list restricted to trusted administrators: project editors can access its Script Properties, including the PDF service token. Never commit the token or other credentials to this repository.
+
+## Interface and startup
+
+Invoice lists use compact vendor/PO, status, and amount summaries. Expand **Details** or **Review & approve** for metadata and approval controls; **View PDF** opens the review package, and **Actions** groups history, revision, withdrawal, rebuild, retry, and deletion according to the user's permissions. Expansion and approval notes survive background refreshes of the same invoice version; loaded history is retained only while the invoice is unchanged.
+
+The May 2024 IEDRC brand guide supplies navy `#1A2C57`, orange `#F06937`, light blue `#BFD4DB`, and brown `#C05B28`. The supplied horizontal logo is embedded in `Brand.html`, proportionally resized without recoloring, with clear space on a white header. Typography uses locally available Univers LT Std with Arial/Calibri fallbacks; no licensed font files or external logo hosting are required.
+
+Initial loading fetches setup, invoices, and vendor suggestions together. Signature images and admin settings load only when their tabs are opened and are retained for the page session; mutations reload the relevant settings. Failed loads show an error and can be retried by reopening the tab. PDFs and history remain on demand.
+
+## Approved migration direction (not yet deployed)
+
+The target architecture is a static frontend, Supabase PostgreSQL/Auth for workflow data and Workspace sign-in, Resend for notifications, and Google Shared Drive for original and generated PDFs. Drive file IDs belong in the database; invoice lists should not fetch Drive metadata or PDFs. Keep backend credentials private and check domain, role, and invoice access on every operation.
+
+Use indexed, paginated database queries, durable background PDF/email jobs with idempotent retries, and daily database/audit exports to Drive. Store PDFs in Drive immediately rather than introduce a daily Supabase-to-Drive file cache. Preserve existing approval ordering, signatures, permissions, audit history, and final PDF email attachments during the cutover.
+
+This checkout still runs on Apps Script and Sheets. Cutover requires a provisioned Supabase project, Google OAuth configuration, backend access to the Shared Drive, a verified Resend sender, hosting configuration, and a verified import of existing records and file references. Do not disable the existing app until that replacement has been deployed and verified.
 
 ## PDF service local checks
 

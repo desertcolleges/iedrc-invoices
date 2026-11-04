@@ -4,49 +4,109 @@
     <base target="_top">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
-      :root { font-family: Arial, sans-serif; color: #1f2937; background: #f3f4f6; }
+      :root {
+        --navy: #1a2c57; --orange: #f06937; --light-blue: #bfd4db; --brown: #c05b28;
+        --border: #dce4e9; --muted: #526174;
+        font-family: "Univers LT Std", Arial, Calibri, sans-serif; color: var(--navy); background: #f4f7f8;
+        font-size: 14px; line-height: 1.45;
+      }
+      * { box-sizing: border-box; }
       body { margin: 0; }
-      header { background: #12395b; color: white; padding: 1rem max(1rem, calc((100% - 1000px) / 2)); }
-      main { max-width: 1000px; margin: 1.5rem auto; padding: 0 1rem; }
-      section, .invoice { background: white; padding: 1rem; border-radius: 8px; margin-bottom: 1rem; box-shadow: 0 1px 3px #0001; }
+      header { background: white; border-bottom: 3px solid var(--orange); }
+      .header-inner { max-width: 1160px; margin: auto; padding: 1.5rem; display: flex; align-items: center; gap: 2rem; }
+      .brand-logo { width: 270px; max-width: 100%; height: auto; display: block; }
+      .app-title { border-left: 1px solid var(--border); padding-left: 2rem; }
+      .app-title strong { font-size: 1.3rem; }
+      .app-title span { display: block; color: var(--muted); font-size: .85rem; }
+      #identity { margin-left: auto; color: var(--muted); font-size: .85rem; overflow-wrap: anywhere; }
+      main { max-width: 1160px; margin: 1.2rem auto; padding: 0 1.5rem; }
+      section { background: white; padding: 1.2rem; border: 1px solid var(--border); border-radius: 10px; margin-bottom: 1rem; }
+      h2 { font-size: 1.2rem; margin: 0 0 1rem; }
+      h3 { font-size: 1rem; margin-bottom: .6rem; }
+      p:empty { display: none; }
       form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .8rem; }
       label { display: grid; gap: .3rem; font-size: .9rem; }
       label.full { grid-column: 1 / -1; }
-      input, textarea, select, button { font: inherit; padding: .55rem; }
+      input, textarea, select, button { font: inherit; padding: .5rem .7rem; }
+      input, textarea, select { border: 1px solid #a6b4c3; border-radius: 5px; min-width: 0; color: var(--navy); background: white; }
       textarea { min-height: 4rem; }
-      button { cursor: pointer; border: 0; border-radius: 4px; background: #155e8a; color: white; }
-      button.secondary { background: #6b7280; }
+      button { cursor: pointer; border: 1px solid transparent; border-radius: 5px; background: var(--navy); color: white; font-weight: 600; }
+      button:hover { filter: brightness(.92); }
+      button.secondary { background: white; border-color: #a6b4c3; color: var(--navy); }
       button.reject { background: #a12b2b; }
-      .actions { display: flex; gap: .5rem; margin-top: .7rem; }
+      button:disabled { opacity: .55; cursor: wait; }
+      :focus-visible { outline: 3px solid var(--brown); outline-offset: 3px; }
+      fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+      .actions { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .7rem; align-items: center; }
       .error { color: #a12b2b; white-space: pre-wrap; }
-      .muted { color: #6b7280; }
+      .muted { color: var(--muted); }
       .ok { color: #1f6f43; }
       .details { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: .3rem .8rem; margin: .5rem 0; font-size: .9rem; }
-      .details span { color: #6b7280; display: block; font-size: .75rem; }
+      .details span { color: var(--muted); display: block; font-size: .75rem; }
+      .details div { overflow-wrap: anywhere; }
       canvas { border: 1px solid #9ca3af; border-radius: 4px; background: #fff; touch-action: none; max-width: 100%; }
       table { width: 100%; border-collapse: collapse; font-size: .9rem; }
-      td, th { padding: .3rem; text-align: left; }
+      .table-scroll { overflow-x: auto; }
+      .table-scroll table { min-width: 540px; }
+      td, th { padding: .5rem; text-align: left; border-bottom: 1px solid var(--border); }
       td input, td select { width: 100%; box-sizing: border-box; }
       details > summary { cursor: pointer; font-weight: bold; font-size: 1.1rem; }
-      nav { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: 1rem; }
-      nav button { background: #e5e7eb; color: #1f2937; }
-      nav button[aria-selected=true] { background: #155e8a; color: white; }
+      nav { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: 1rem; border-bottom: 1px solid var(--border); padding-bottom: .6rem; }
+      nav button { background: transparent; color: var(--navy); }
+      nav button[aria-selected=true] { background: var(--navy); color: white; box-shadow: inset 0 -3px var(--orange); }
       .inactive { display: none; }
-      .chip { background: #e5e7eb; color: #1f2937; border-radius: 999px; padding: .3rem .8rem; font-size: .85rem; }
-      .chip[aria-pressed=true] { background: #155e8a; color: #fff; }
+      .chip { background: #f4f7f8; color: var(--navy); border-color: var(--border); border-radius: 999px; padding: .3rem .8rem; font-size: .85rem; }
+      .chip[aria-pressed=true] { background: var(--light-blue); border-color: var(--navy); }
+      .invoice { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .5rem 1rem; padding: .75rem 0; border-top: 1px solid var(--border); }
+      .invoice-expand { min-width: 0; }
+      .invoice-summary { list-style: none; display: grid; grid-template-columns: minmax(160px, 1fr) 155px 100px 125px; gap: 1rem; align-items: center; min-height: 36px; }
+      .invoice-summary::-webkit-details-marker, .more-actions > summary::-webkit-details-marker { display: none; }
+      .invoice-summary strong { display: block; overflow-wrap: anywhere; font-size: .95rem; }
+      .invoice-reference { display: block; font-size: .8rem; color: var(--muted); font-weight: normal; }
+      .invoice-amount { text-align: right; font-variant-numeric: tabular-nums; font-size: .95rem; }
+      .expand-label { text-align: right; font-size: .8rem; font-weight: 600; }
+      .expand-label::after { content: ' +'; }
+      .invoice-expand[open] .expand-label::after { content: ' -'; }
+      .invoice-body { border-top: 1px dashed var(--border); margin-top: .7rem; padding-top: .5rem; }
+      .status { display: inline-block; width: fit-content; font-weight: 600; font-size: .75rem; padding: .2rem .55rem; border-radius: 999px; background: #edf2f5; }
+      .status-pending, .status-processing { background: var(--light-blue); color: var(--navy); }
+      .status-revision { background: #fff0e9; color: #833613; }
+      .status-filed { background: #e9f3ed; color: #1f6f43; }
+      .row-actions { display: flex; align-items: flex-start; gap: .4rem; padding-top: .1rem; }
+      .row-actions button, .more-actions > summary { font-size: .8rem; padding: .4rem .65rem; white-space: nowrap; }
+      .more-actions { position: relative; }
+      .more-actions > summary { list-style: none; border: 1px solid #a6b4c3; border-radius: 5px; font-weight: 600; }
+      .action-menu { position: absolute; right: 0; top: calc(100% + .3rem); z-index: 5; min-width: 175px; display: grid; gap: .2rem; padding: .4rem; border: 1px solid var(--border); border-radius: 6px; background: white; box-shadow: 0 4px 14px #1a2c5726; }
+      .action-menu button { text-align: left; }
+      .approval-actions input { flex: 1 1 200px; }
+      .invoice-history { grid-column: 1 / -1; }
+      .invoice-history:empty { display: none; }
       .rejection { background: #fef2f2; border-left: 4px solid #a12b2b; padding: .5rem .7rem; margin: .5rem 0; font-size: .9rem; white-space: pre-wrap; }
-      .invoice.highlight { outline: 3px solid #155e8a; }
+      .invoice.highlight { outline: 2px solid var(--brown); outline-offset: 3px; }
       .history { font-size: .85rem; margin: .5rem 0 0; padding-left: 1.1rem; }
       #viewer:not([hidden]) { display: flex; }
-      #busy { position: fixed; inset: 0 0 auto 0; z-index: 10; background: #155e8a; color: #fff; padding: .6rem 1rem; text-align: center; box-shadow: 0 2px 6px #0004; }
+      .viewer-toolbar { background: var(--navy); color: #fff; padding: .6rem 1rem; display: flex; gap: .6rem; align-items: center; }
+      #busy { position: fixed; inset: 0 0 auto 0; z-index: 10; background: var(--navy); color: #fff; padding: .6rem 1rem; text-align: center; box-shadow: 0 2px 6px #0004; }
       #busy::before { content: ''; display: inline-block; width: .9em; height: .9em; margin-right: .6em; vertical-align: -.1em; border: 2px solid #fff6; border-top-color: #fff; border-radius: 50%; animation: spin .8s linear infinite; }
       @keyframes spin { to { transform: rotate(360deg); } }
-      @media (max-width: 600px) { form { grid-template-columns: 1fr; } label.full { grid-column: auto; } }
+      @media (max-width: 1000px) { .invoice-summary { grid-template-columns: minmax(120px, 1fr) 130px 90px; gap: .5rem; } .expand-label { grid-column: 1 / -1; text-align: left; } }
+      @media (max-width: 600px) {
+        main { padding: 0 .75rem; } section { padding: .9rem; }
+        .header-inner { padding: 1.2rem; flex-wrap: wrap; gap: 1rem; } .brand-logo { width: 240px; }
+        .app-title { border: 0; padding: 0; } #identity { margin-left: 0; }
+        form { grid-template-columns: 1fr; } label.full { grid-column: auto; }
+        .invoice { grid-template-columns: minmax(0, 1fr); } .row-actions { grid-row: 2; }
+        .invoice-summary { grid-template-columns: minmax(0, 1fr) auto; }
+        .invoice-summary .status { grid-row: 2; } .invoice-amount { grid-column: 2; grid-row: 1; }
+        .expand-label { grid-column: 2; grid-row: 2; }
+        .action-menu { left: 0; right: auto; } td, th { padding: .3rem; }
+      }
+      @media (prefers-reduced-motion: reduce) { #busy::before { animation: none; } }
     </style>
   </head>
   <body>
     <div id="viewer" hidden style="position:fixed;inset:0;z-index:20;background:#0009;flex-direction:column">
-      <div style="background:#12395b;color:#fff;padding:.6rem 1rem;display:flex;gap:.6rem;align-items:center">
+      <div class="viewer-toolbar">
         <strong id="viewerTitle" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></strong>
         <button type="button" class="secondary" id="viewerDownload">Download</button>
         <button type="button" class="secondary" onclick="closeViewer()">Close</button>
@@ -54,7 +114,11 @@
       <div id="viewerPages" style="flex:1;overflow:auto;padding:1rem;max-width:900px;width:100%;box-sizing:border-box;margin:0 auto"></div>
     </div>
     <div id="busy" role="status" hidden>Working…</div>
-    <header><strong>IEDRC Invoice Approval</strong><span id="identity" style="float:right"></span></header>
+    <header><div class="header-inner">
+      <?!= HtmlService.createHtmlOutputFromFile('Brand').getContent(); ?>
+      <div class="app-title"><strong>Invoice Approval</strong><span>Internal office workflow</span></div>
+      <span id="identity"></span>
+    </div></header>
     <main id="app">
       <p id="appError" class="error" role="alert"></p>
       <section id="setup" hidden>
@@ -90,7 +154,7 @@
         <div id="currentSignature"></div>
         <canvas id="sigPad" width="480" height="150" aria-label="Signature pad"></canvas>
         <div class="actions">
-          <button id="saveSignature">Save signature</button>
+          <button id="saveSignature" disabled>Save signature</button>
           <button class="secondary" id="clearSignature" type="button">Clear</button>
         </div>
         <p id="signatureMessage" class="error" role="status"></p>
@@ -98,6 +162,8 @@
       <section id="adminSection" data-tab="admin" data-label="Admin" hidden>
         <details>
           <summary>Admin settings</summary>
+          <p id="adminLoadMessage" class="muted" role="status"></p>
+          <fieldset id="adminControls" disabled>
           <form id="settingsForm">
             <label>AP email<input name="AP_EMAIL" type="email" required></label>
             <label>Default approver 1<select name="DEFAULT_APPROVER"></select></label>
@@ -110,7 +176,7 @@
           </form>
           <p id="adminInfo" class="muted"></p>
           <h3>Approvers</h3>
-          <table id="approverTable"></table>
+          <div class="table-scroll" tabindex="0" role="region" aria-label="Approvers"><table id="approverTable"></table></div>
           <form id="approverForm">
             <label>Name<input name="name" required></label>
             <label>Email<input name="email" type="email" required></label>
@@ -120,9 +186,10 @@
           </form>
           <h3>Routing rules</h3>
           <p class="muted">The highest matching "minimum amount" pre-selects approvers for submitters. Leave empty for no routing.</p>
-          <table id="routingTable"></table>
+          <div class="table-scroll" tabindex="0" role="region" aria-label="Routing rules"><table id="routingTable"></table></div>
           <div class="actions"><button class="secondary" id="addRule" type="button">Add rule</button><button id="saveRules" type="button">Save rules</button></div>
           <p id="adminMessage" class="error" role="status"></p>
+          </fieldset>
         </details>
       </section>
       <section data-tab="mine" data-label="My invoices &amp; approvals">
@@ -150,6 +217,10 @@
       let setup = null;
       let activeTab = 'submit';
       let vendors = [];
+      let signatureLoaded = false;
+      let signatureRequest = null;
+      let adminLoaded = false;
+      let adminRequest = null;
       const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char =>
         ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
       const money = value => '$' + Number(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -182,34 +253,56 @@
         reader.readAsDataURL(file);
       });
 
+      function invoiceSummary(invoice, label) {
+        const status = String(invoice.status);
+        const group = status.startsWith('Pending') ? 'pending' : status === 'Filed' ? 'filed'
+          : status === 'Needs Revision' ? 'revision' : invoice.building ? 'processing' : 'other';
+        return `<summary class="invoice-summary">
+          <div><strong>${escapeHtml(invoice.vendor)}</strong><span class="invoice-reference">${escapeHtml(invoice.invoiceNo)} · PO ${escapeHtml(invoice.po)}</span></div>
+          <span class="status status-${group}">${escapeHtml(status)}${invoice.building ? ' · Working' : ''}</span>
+          <strong class="invoice-amount">${money(invoice.amount)}</strong>
+          <span class="expand-label">${label}</span>
+        </summary>`;
+      }
+      function invoiceDetails(invoice) {
+        return `<div class="details">
+          <div><span>Invoice date</span>${escapeHtml(invoice.invoiceDate)}</div>
+          <div><span>Submitted by</span>${escapeHtml(invoice.submitter)}</div>
+          ${invoice.notes ? `<div><span>Notes</span>${escapeHtml(invoice.notes)}</div>` : ''}
+        </div>`;
+      }
       function invoiceCard(invoice) {
         const id = escapeHtml(invoice.id);
-        return `<article class="invoice" data-invoice-id="${id}">
-          <strong>${escapeHtml(invoice.vendor)} — ${escapeHtml(invoice.invoiceNo)}</strong>
-          <div>${escapeHtml(invoice.status)}${invoice.building ? ' <span class="muted">— working on it…</span>' : ''}</div>
-          ${invoice.rejectionNote || invoice.rejectedBy ? `<div class="rejection"><strong>Returned by ${escapeHtml(invoice.rejectedBy)}:</strong> ${escapeHtml(invoice.rejectionNote)}</div>` : ''}
-          <div class="details">
-            <div><span>Amount</span>${money(invoice.amount)}</div>
-            <div><span>PO</span>${escapeHtml(invoice.po)}</div>
-            <div><span>Invoice date</span>${escapeHtml(invoice.invoiceDate)}</div>
-            <div><span>Submitted by</span>${escapeHtml(invoice.submitter)}</div>
-            ${invoice.notes ? `<div><span>Notes</span>${escapeHtml(invoice.notes)}</div>` : ''}
+        return `<article class="invoice" data-invoice-id="${id}" data-updated-at="${escapeHtml(invoice.updatedAt || '')}" data-version="${escapeHtml(invoice.version || '')}">
+          <details class="invoice-expand">
+            ${invoiceSummary(invoice, invoice.canApprove ? 'Review & approve' : 'Details')}
+            <div class="invoice-body">
+              ${invoiceDetails(invoice)}
+              ${invoice.rejectionNote || invoice.rejectedBy ? `<div class="rejection"><strong>Returned by ${escapeHtml(invoice.rejectedBy)}:</strong> ${escapeHtml(invoice.rejectionNote)}</div>` : ''}
+              ${invoice.awaitingPackage && invoice.building ? '<p class="muted">The review package is being prepared. This page updates automatically.</p>' : ''}
+              ${invoice.awaitingPackage && !invoice.building ? '<p class="error">The review package could not be built. The submitter or an admin can rebuild it.</p>' : ''}
+              ${invoice.canApprove ? `<div class="actions approval-actions">
+                <input id="note-${id}" aria-label="Approval note or rejection reason" placeholder="Note or rejection reason">
+                <button onclick="decide('${id}','approve')">Approve with my signature</button>
+                <button class="reject" onclick="decide('${id}','reject')">Reject</button>
+              </div>` : ''}
+            </div>
+          </details>
+          <div class="row-actions">
+            ${invoice.hasPackage ? `<button class="secondary" onclick="openPackage('${id}', this)">View PDF</button>` : ''}
+            <details class="more-actions">
+              <summary aria-label="More actions for ${escapeHtml(invoice.vendor)} ${escapeHtml(invoice.invoiceNo)}">Actions</summary>
+              <div class="action-menu">
+                <button class="secondary" onclick="toggleHistory('${id}', this)">History</button>
+                ${invoice.canRebuild ? `<button class="secondary" onclick="rebuild('${id}')">Rebuild package</button>` : ''}
+                ${invoice.canWithdraw ? `<button class="secondary" onclick="withdraw('${id}')">Withdraw</button>` : ''}
+                ${invoice.canRevise ? `<button class="secondary" onclick="startRevision('${id}')">Revise and resubmit</button>` : ''}
+                ${invoice.canRetry ? `<button class="secondary" onclick="retry('${id}')">Retry finalization</button>` : ''}
+                ${invoice.canDelete ? `<button class="reject" onclick="removeInvoice('${id}')">Delete record</button>` : ''}
+              </div>
+            </details>
           </div>
-          ${invoice.hasPackage ? `<div class="actions"><button class="secondary" onclick="openPackage('${id}', this)">View package</button></div>` : ''}
-          ${invoice.awaitingPackage && invoice.building ? '<p class="muted">The review package is being prepared. This page updates automatically.</p>' : ''}
-          ${invoice.awaitingPackage && !invoice.building ? '<p class="error">The review package could not be built. The submitter or an admin can rebuild it.</p>' : ''}
-          ${invoice.canRebuild ? `<div class="actions"><button class="secondary" onclick="rebuild('${id}')">Rebuild package</button></div>` : ''}
-          ${invoice.canWithdraw ? `<div class="actions"><button class="secondary" onclick="withdraw('${id}')">Withdraw</button></div>` : ''}
-          ${invoice.canRevise ? `<div class="actions"><button class="secondary" onclick="startRevision('${id}')">Revise and resubmit</button></div>` : ''}
-          ${invoice.canApprove ? `<div class="actions">
-            <input id="note-${id}" aria-label="Approval note" placeholder="Note or rejection reason">
-            <button onclick="decide('${id}','approve')">Approve with my signature</button>
-            <button class="reject" onclick="decide('${id}','reject')">Reject</button>
-          </div>` : ''}
-          ${invoice.canDelete ? `<div class="actions"><button class="reject" onclick="removeInvoice('${id}')">Delete record</button></div>` : ''}
-          <div class="actions"><button class="secondary" onclick="toggleHistory('${id}', this)">History</button></div>
-          <div id="history-${id}"></div>
-          ${invoice.canRetry ? `<div class="actions"><button class="secondary" onclick="retry('${id}')">Retry finalization</button></div>` : ''}
+          <div class="invoice-history" id="history-${id}"></div>
         </article>`;
       }
       function showTab(name) {
@@ -217,6 +310,8 @@
         document.querySelectorAll('#tabs button').forEach(button => button.setAttribute('aria-selected', String(button.dataset.tab === name)));
         activeTab = name;
         if (name === 'view' && !$('#searchResults').dataset.loaded) searchInvoices();
+        if (name === 'signature' && !signatureLoaded) loadSignature();
+        if (name === 'admin' && !adminLoaded) loadAdmin();
       }
       function renderTabs() {
         const visible = [...document.querySelectorAll('section[data-tab]')].filter(section => !section.hidden);
@@ -227,15 +322,11 @@
       }
       function searchCard(item) {
         return `<article class="invoice">
-          <strong>${escapeHtml(item.vendor)} — ${escapeHtml(item.invoiceNo)}</strong>
-          <div>${escapeHtml(item.status)}</div>
-          <div class="details">
-            <div><span>Amount</span>${money(item.amount)}</div>
-            <div><span>PO</span>${escapeHtml(item.po)}</div>
-            <div><span>Invoice date</span>${escapeHtml(item.invoiceDate)}</div>
-            <div><span>Submitted by</span>${escapeHtml(item.submitter)}</div>
-          </div>
-          ${item.canView ? `<div class="actions"><button class="secondary" onclick="openPackage('${escapeHtml(item.id)}', this)">View package</button></div>` : ''}
+          <details class="invoice-expand">
+            ${invoiceSummary(item, 'Details')}
+            <div class="invoice-body">${invoiceDetails(item)}</div>
+          </details>
+          ${item.canView ? `<div class="row-actions"><button class="secondary" onclick="openPackage('${escapeHtml(item.id)}', this)">View PDF</button></div>` : ''}
         </article>`;
       }
       function searchFilters() {
@@ -293,13 +384,31 @@
         if (tab) tab.textContent = awaiting ? `My invoices & approvals (${awaiting})` : 'My invoices & approvals';
         const test = FILTERS.find(entry => entry[0] === invoiceFilter)[2];
         const data = all.filter(test);
+        const previous = new Map([...$('#invoices').querySelectorAll('[data-invoice-id]')].map(card => [
+          card.dataset.invoiceId, {
+            open: card.querySelector('.invoice-expand').open,
+            note: card.querySelector('input')?.value || '',
+            history: card.querySelector('.invoice-history').innerHTML,
+            updatedAt: card.dataset.updatedAt,
+            version: card.dataset.version,
+          },
+        ]));
         $('#invoices').className = '';
         $('#invoices').innerHTML = data.length ? data.map(invoiceCard).join('') : '<p>No invoices to show.</p>';
+        $('#invoices').querySelectorAll('[data-invoice-id]').forEach(card => {
+          const state = previous.get(card.dataset.invoiceId);
+          if (!state) return;
+          card.querySelector('.invoice-expand').open = state.open;
+          const note = card.querySelector('input');
+          if (note && state.version === card.dataset.version) note.value = state.note;
+          if (state.updatedAt === card.dataset.updatedAt) card.querySelector('.invoice-history').innerHTML = state.history;
+        });
         if (deepLinkId) focusInvoice(deepLinkId);
         clearTimeout(pollTimer);
         if (all.some(item => item.building) && pollCount < 40) {
           pollCount += 1;
-          pollTimer = setTimeout(() => runQuiet('getDashboard').then(data => { window.invoiceData = data; renderInvoices(); }).catch(() => {}), 4000);
+          pollTimer = setTimeout(() => runQuiet('getDashboard').then(data => { window.invoiceData = data; renderInvoices(); })
+            .catch(error => showError($('#appError'), new Error(`Automatic refresh failed: ${error.message || error}. Reload the page to retry.`))), 4000);
         } else if (!all.some(item => item.building)) {
           pollCount = 0;
         }
@@ -312,7 +421,7 @@
         if (!FILTERS.find(entry => entry[0] === invoiceFilter)[2](item)) { invoiceFilter = 'all'; renderInvoices(); }
         showTab('mine');
         const card = $('#invoices').querySelector(`[data-invoice-id="${CSS.escape(id)}"]`);
-        if (card) { card.classList.add('highlight'); card.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
+        if (card) { card.querySelector('.invoice-expand').open = true; card.classList.add('highlight'); card.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
       }
       function refresh() {
         pollCount = 0;
@@ -328,6 +437,7 @@
       }
       function toggleHistory(id, button) {
         const box = document.getElementById(`history-${id}`);
+        button.closest('.more-actions').open = false;
         if (box.innerHTML) { box.innerHTML = ''; return; }
         button.disabled = true;
         run('getHistory', id).then(rows => {
@@ -468,7 +578,7 @@
         applyRouting();
       }
       function loadApp() {
-        run('getBootstrap').then(boot => {
+        run('getBootstrap', { deferSecondary: true }).then(boot => {
           const info = boot.setup;
           setup = info;
           const ready = info.initialized && !info.upgradeNeeded;
@@ -488,8 +598,6 @@
           renderVendors();
           window.invoiceData = boot.dashboard;
           renderInvoices();
-          if (info.isApprover) applySignature(boot.signature);
-          if (info.admin) applyAdmin(boot.admin);
         }).catch(error => showError($('#appError'), error));
       }
 
@@ -532,7 +640,17 @@
         }).catch(error => showError(message, error));
       });
       function loadSignature() {
-        run('getMySignature').then(applySignature).catch(error => showError($('#signatureMessage'), error));
+        if (signatureRequest) return signatureRequest;
+        signatureLoaded = false;
+        $('#signatureMessage').textContent = '';
+        $('#saveSignature').disabled = true;
+        signatureRequest = run('getMySignature').then(url => {
+          applySignature(url);
+          signatureLoaded = true;
+          $('#saveSignature').disabled = false;
+        }).catch(error => showError($('#signatureMessage'), error))
+          .finally(() => { signatureRequest = null; });
+        return signatureRequest;
       }
       function applySignature(url) {
         {
@@ -544,7 +662,21 @@
 
       // Admin
       function loadAdmin() {
-        run('getAdminData').then(applyAdmin).catch(error => showError($('#adminMessage'), error));
+        if (adminRequest) return adminRequest;
+        adminLoaded = false;
+        $('#adminControls').disabled = true;
+        $('#adminLoadMessage').className = 'muted';
+        $('#adminLoadMessage').textContent = 'Loading admin settings…';
+        adminRequest = run('getAdminData').then(data => {
+          applyAdmin(data);
+          adminLoaded = true;
+          $('#adminControls').disabled = false;
+          $('#adminLoadMessage').textContent = '';
+        }).catch(error => {
+          adminLoaded = false;
+          showError($('#adminLoadMessage'), error);
+        }).finally(() => { adminRequest = null; });
+        return adminRequest;
       }
       function applyAdmin(data) {
         {
@@ -648,7 +780,20 @@
           loadApp();
         }
       });
-      document.addEventListener('keydown', event => { if (event.key === 'Escape') closeViewer(); });
+      document.addEventListener('click', event => {
+        document.querySelectorAll('.more-actions[open]').forEach(menu => {
+          if (!menu.contains(event.target)) menu.open = false;
+        });
+      });
+      document.addEventListener('keydown', event => {
+        if (event.key === 'Escape') {
+          closeViewer();
+          document.querySelectorAll('.more-actions[open]').forEach(menu => {
+            menu.open = false;
+            menu.querySelector('summary').focus();
+          });
+        }
+      });
       $('#initialize').addEventListener('click', () => {
         const button = $('#initialize');
         button.disabled = true;

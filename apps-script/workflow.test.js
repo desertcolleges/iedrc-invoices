@@ -241,3 +241,35 @@ test('only admins may run the queue by hand', () => {
   world.as('b@x.edu');
   assert.throws(() => world.run('processQueue()'), /Only an admin/);
 });
+
+test('lightweight bootstrap defers signature and admin service calls', () => {
+  const world = createWorld();
+  world.run(`getMySignature = () => { throw new Error('Unexpected signature load'); };
+    getAdminData = () => { throw new Error('Unexpected admin load'); };`);
+  const boot = world.call('getBootstrap', { deferSecondary: true });
+  assert.equal(boot.setup.admin, true);
+  assert.equal(boot.setup.isApprover, true);
+  assert.ok(Array.isArray(boot.dashboard));
+  assert.ok(Array.isArray(boot.vendors));
+  assert.equal(Object.hasOwn(boot, 'signature'), false);
+  assert.equal(Object.hasOwn(boot, 'admin'), false);
+});
+
+test('bootstrap retains secondary data for existing clients', () => {
+  const world = createWorld();
+  const boot = world.call('getBootstrap');
+  assert.match(boot.signature, /^data:image\/png;base64,/);
+  assert.ok(boot.admin.settings);
+  const explicit = world.call('getBootstrap', { deferSecondary: false });
+  assert.equal(explicit.signature, boot.signature);
+  assert.ok(explicit.admin.settings);
+});
+
+test('lightweight bootstrap preserves initialization checks', () => {
+  const world = createWorld();
+  world.run(`getSetupInfo = () => ({ initialized: false, upgradeNeeded: true });
+    getDashboard = () => { throw new Error('Unexpected dashboard load'); };`);
+  const boot = world.call('getBootstrap', { deferSecondary: true });
+  assert.equal(boot.setup.initialized, false);
+  assert.equal(Object.hasOwn(boot, 'dashboard'), false);
+});
