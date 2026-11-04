@@ -96,3 +96,16 @@ test('iso_ and toMs_ handle Date objects and strings', () => {
   assert.equal(call("toMs_('2026-01-02T03:04:05.000Z')"), Date.parse('2026-01-02T03:04:05.000Z'));
   assert.equal(call("toMs_('')"), 0);
 });
+
+test('doGet evaluates the branded HTML template', () => {
+  const response = { setTitle: title => ({ title }) };
+  const result = call('doGet()', {
+    HtmlService: {
+      createTemplateFromFile: name => {
+        assert.equal(name, 'Index');
+        return { evaluate: () => response };
+      },
+    },
+  });
+  assert.equal(result.title, 'IEDRC Invoice Approval');
+});

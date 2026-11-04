@@ -46,7 +46,7 @@ function clearMemo_() {
 }
 
 function doGet() {
-  return HtmlService.createHtmlOutputFromFile('Index').setTitle('IEDRC Invoice Approval');
+  return HtmlService.createTemplateFromFile('Index').evaluate().setTitle('IEDRC Invoice Approval');
 }
 
 function configuredAdmins_() {
@@ -226,15 +226,17 @@ function getSetupInfo() {
   };
 }
 
-// Everything the page needs on load in a single round trip.
-function getBootstrap() {
+// Older clients still receive secondary data until Code.gs and Index.html are redeployed together.
+function getBootstrap(options) {
   const setup = getSetupInfo();
   const result = { setup };
   if (!setup.initialized || setup.upgradeNeeded) return result;
   result.dashboard = getDashboard();
   result.vendors = getVendorHints_(getDb_());
-  if (setup.isApprover) result.signature = getMySignature();
-  if (setup.admin) result.admin = getAdminData();
+  if (!options || options.deferSecondary !== true) {
+    if (setup.isApprover) result.signature = getMySignature();
+    if (setup.admin) result.admin = getAdminData();
+  }
   return result;
 }
 
@@ -269,6 +271,8 @@ function getDashboard() {
         amount: Number(row.Amount),
         submitter: row.SubmitterEmail,
         createdAt: iso_(row.CreatedAt),
+        updatedAt: iso_(row.UpdatedAt),
+        version: Number(row.Version),
         group: statusGroup_(row.Status),
         awaitingMe: pendingByInvoice.has(row.ID),
         building,
