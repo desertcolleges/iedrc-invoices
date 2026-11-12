@@ -173,7 +173,71 @@ test('submit returns immediately and the queue builds the package and notifies t
   const [invoice] = world.call('getDashboard');
   assert.equal(invoice.canApprove, true);
   assert.equal(invoice.group, 'pending');
+  assert.equal(world.mails[0].to, 'a@x.edu');
   assert.match(world.mails[0].body, /app\.example\/exec\?invoice=uuid-/);
+});
+
+test('admin manages an optional notification address without changing the approver identity', () => {
+  const world = createWorld();
+  const approver = { name: 'Alice', email: 'a@x.edu', title: '', active: true };
+  assert.throws(() => world.call('saveApprover', { ...approver, notificationEmail: 'not-an-email' }), /valid notification email/);
+  world.as('b@x.edu');
+  assert.throws(() => world.call('saveApprover', { ...approver, notificationEmail: 'alice@example.com' }), /Only an admin/);
+  world.as('a@x.edu');
+  world.call('saveApprover', { ...approver, notificationEmail: ' Alice@Example.com ' });
+  assert.equal(world.call('getAdminData').approvers[0].notificationEmail, 'alice@example.com');
+  world.call('saveApprover', approver);
+  assert.equal(world.call('getAdminData').approvers[0].notificationEmail, 'alice@example.com');
+
+  world.call('submitInvoice', world.invoiceInput({ approver2: '' }));
+  world.runTrigger();
+  assert.equal(world.mails[0].to, 'alice@example.com');
+  world.as('alice@example.com');
+  assert.throws(() => world.call('getDashboard'), /not authorized/);
+  world.as('a@x.edu');
+  const invoice = world.call('getDashboard')[0];
+  assert.equal(invoice.canApprove, true);
+  world.call('decideInvoice', { id: invoice.id, action: 'approve', note: '' });
+  assert.equal(world.sheets.Approvals.rows[1][3], 'a@x.edu');
+
+  world.call('saveApprover', { ...approver, notificationEmail: '' });
+  world.call('submitInvoice', world.invoiceInput({ invoiceNo: 'INV-2', approver2: '' }));
+  world.runTrigger();
+  assert.ok(world.mails.some(mail => mail.subject === 'Invoice approval requested' && mail.to === 'a@x.edu'));
+});
+
+test('notification addresses apply to second approver, reminders and withdrawals', () => {
+  const world = createWorld();
+  world.call('saveApprover', { name: 'Bob', email: 'b@x.edu', active: true, notificationEmail: 'bob@example.com' });
+  world.call('submitInvoice', world.invoiceInput());
+  world.runTrigger();
+  const id = world.call('getDashboard')[0].id;
+  world.call('decideInvoice', { id, action: 'approve', note: '' });
+  world.runTrigger();
+  assert.equal(world.mails.at(-1).to, 'bob@example.com');
+  assert.equal(world.mails.at(-1).subject, 'Invoice approval requested');
+
+  const headers = world.sheets.Invoices.rows[0];
+  world.sheets.Invoices.rows[1][headers.indexOf('UpdatedAt')] = '2020-01-01T00:00:00.000Z';
+  world.run('clearMemo_()');
+  assert.equal(world.run('sendReminders()'), 1);
+  assert.equal(world.mails.at(-1).to, 'bob@example.com');
+  assert.match(world.mails.at(-1).subject, /Reminder/);
+  world.call('withdrawInvoice', id);
+  assert.equal(world.mails.at(-1).to, 'bob@example.com');
+  assert.equal(world.mails.at(-1).subject, 'Invoice withdrawn');
+});
+
+test('sheet upgrade appends the notification column while preserving existing approvers', () => {
+  const world = createWorld();
+  world.sheets.Approvers.rows.forEach(row => row.pop());
+  world.run('clearMemo_()');
+  assert.equal(world.call('getSetupInfo').upgradeNeeded, true);
+  world.run('initializeSheets()');
+  assert.equal(world.call('getSetupInfo').upgradeNeeded, false);
+  assert.equal(world.sheets.Approvers.rows[0].at(-1), 'NotificationEmail');
+  assert.equal(world.call('getAdminData').approvers[0].email, 'a@x.edu');
+  assert.equal(world.call('getAdminData').approvers[0].notificationEmail, '');
 });
 
 test('two approvals, background filing, and AP email', () => {

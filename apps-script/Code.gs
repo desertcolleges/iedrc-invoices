@@ -21,7 +21,7 @@ const HEADERS = {
     'SignedAt', 'Note', 'Signature', 'RemindedAt', 'EscalatedAt',
   ],
   Audit: ['Timestamp', 'InvoiceID', 'Actor', 'Action', 'Details'],
-  Approvers: ['Name', 'Email', 'Title', 'Active', 'SignatureFileId'],
+  Approvers: ['Name', 'Email', 'Title', 'Active', 'SignatureFileId', 'NotificationEmail'],
   Admins: ['Email'],
   Settings: ['Key', 'Value'],
   Routing: ['MinAmount', 'Approver1', 'Approver2', 'Active'],
@@ -519,7 +519,7 @@ function withdrawInvoice(id) {
     audit_(db, id, user.email, 'Withdrawn', {});
   });
   if (packageFileId) trashFile_(packageFileId);
-  sendNotice_(notify, 'Invoice withdrawn', `Invoice ${invoice.InvoiceNo} from ${invoice.Vendor} was withdrawn and no longer needs your approval.`, id);
+  if (notify) sendNotice_(approverNotificationEmail_(db, notify), 'Invoice withdrawn', `Invoice ${invoice.InvoiceNo} from ${invoice.Vendor} was withdrawn and no longer needs your approval.`, id);
   return { ok: true };
 }
 
@@ -670,7 +670,7 @@ function preparePackage_(db, invoice, actor, notifyEmail, notice) {
       `The review package for invoice ${invoice.InvoiceNo} could not be built. Open the app and choose "Rebuild package".`, invoice.ID);
     return false;
   }
-  if (notifyEmail) sendNotice_(notifyEmail, 'Invoice approval requested', notice, invoice.ID);
+  if (notifyEmail) sendNotice_(approverNotificationEmail_(db, notifyEmail), 'Invoice approval requested', notice, invoice.ID);
   return true;
 }
 
@@ -859,6 +859,11 @@ function findApprover_(db, email) {
   return getRows_(db, SHEETS.approvers).find(row => String(row.Email).trim().toLowerCase() === email);
 }
 
+function approverNotificationEmail_(db, email) {
+  const approver = findApprover_(db, String(email).trim().toLowerCase());
+  return String(approver && approver.NotificationEmail || '').trim() || email;
+}
+
 function getMySignature() {
   const user = requireUser_();
   const approver = findApprover_(getDb_(), user.email);
@@ -920,6 +925,7 @@ function getAdminData() {
     settings,
     approvers: getRows_(db, SHEETS.approvers).map(row => ({
       name: row.Name, email: String(row.Email).toLowerCase(), title: row.Title,
+      notificationEmail: String(row.NotificationEmail || ''),
       active: String(row.Active).toLowerCase() === 'true', hasSignature: Boolean(row.SignatureFileId),
     })),
     routing: getRows_(db, SHEETS.routing).map(row => ({
@@ -949,11 +955,14 @@ function saveApprover(input) {
   const email = String(input && input.email || '').trim().toLowerCase();
   const name = String(input && input.name || '').trim();
   if (!isValidEmail_(email) || !name) throw new Error('Enter a name and valid email.');
+  const notificationEmail = String(input && input.notificationEmail || '').trim().toLowerCase();
+  if (notificationEmail && !isValidEmail_(notificationEmail)) throw new Error('Enter a valid notification email.');
   const domain = String(PropertiesService.getScriptProperties().getProperty('ALLOWED_DOMAIN') || '').toLowerCase();
   if (email.split('@')[1] !== domain) throw new Error('Approvers must be in the allowed domain.');
   withLock_(() => {
     const existing = findApprover_(db, email);
     const values = { Name: name, Email: email, Title: String(input.title || '').trim(), Active: Boolean(input.active) };
+    if (input.notificationEmail !== undefined) values.NotificationEmail = notificationEmail;
     if (existing) {
       Object.keys(values).forEach(key => setCell_(db, SHEETS.approvers, existing._row, key, values[key]));
     } else {
@@ -1042,7 +1051,7 @@ function sendReminders() {
     if (action === 'escalate') {
       sendNotice_(settings.ESCALATION_EMAIL, 'Invoice approval overdue', `${summary} has been waiting on ${approval.ApproverEmail}.`, invoice.ID);
     } else {
-      sendNotice_(approval.ApproverEmail, 'Reminder: invoice awaiting your approval', `${summary} is still awaiting your approval.`, invoice.ID);
+      sendNotice_(approverNotificationEmail_(db, approval.ApproverEmail), 'Reminder: invoice awaiting your approval', `${summary} is still awaiting your approval.`, invoice.ID);
     }
   });
   if (due.length) {
