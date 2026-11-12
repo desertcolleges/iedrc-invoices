@@ -176,10 +176,12 @@
           </form>
           <p id="adminInfo" class="muted"></p>
           <h3>Approvers</h3>
+          <p class="muted">Use the Google account for sign-in and approval. Leave notification email blank to send notices to that account.</p>
           <div class="table-scroll" tabindex="0" role="region" aria-label="Approvers"><table id="approverTable"></table></div>
           <form id="approverForm">
             <label>Name<input name="name" required></label>
-            <label>Email<input name="email" type="email" required></label>
+            <label>Google account email<input name="email" type="email" required></label>
+            <label>Notification email (optional)<input name="notificationEmail" type="email"></label>
             <label>Title<input name="title"></label>
             <label>Active<select name="active"><option value="true">Active</option><option value="false">Inactive</option></select></label>
             <div class="full"><button type="submit" id="approverSubmit">Add approver</button> <button type="button" class="secondary" id="approverCancel" hidden onclick="resetApproverForm()">Cancel</button></div>
@@ -686,8 +688,8 @@
             .map(item => `<option value="${escapeHtml(item.email)}">${escapeHtml(item.name)} (${escapeHtml(item.email)})</option>`).join('');
           Object.keys(data.settings).forEach(key => { if (form.elements[key]) form.elements[key].value = data.settings[key]; });
           $('#adminInfo').textContent = `Daily reminders: ${data.remindersScheduled ? 'enabled' : 'not enabled'}. Email sends remaining today: ${data.mailQuotaRemaining}.`;
-          $('#approverTable').innerHTML = '<tr><th>Name</th><th>Email</th><th>Status</th><th>Signature</th><th>Actions</th></tr>' +
-            data.approvers.map(item => `<tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.email)}</td>
+          $('#approverTable').innerHTML = '<tr><th>Name</th><th>Google account</th><th>Notification email</th><th>Status</th><th>Signature</th><th>Actions</th></tr>' +
+            data.approvers.map(item => `<tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.email)}</td><td>${escapeHtml(item.notificationEmail || 'Same as Google account')}</td>
               <td>${item.active ? 'Active' : 'Inactive'}</td><td>${item.hasSignature ? 'Saved' : 'None'}</td>
               <td class="actions" style="margin:0"><button class="secondary" type="button" onclick="editApprover('${escapeHtml(item.email)}')">Edit</button>
                 ${item.hasSignature ? `<button class="secondary" type="button" onclick="resetSig('${escapeHtml(item.email)}')">Reset signature</button>` : ''}
@@ -719,6 +721,7 @@
         form.elements.name.value = item.name;
         form.elements.email.value = item.email;
         form.elements.email.readOnly = true;
+        form.elements.notificationEmail.value = item.notificationEmail || '';
         form.elements.title.value = item.title || '';
         form.elements.active.value = String(item.active);
         $('#approverSubmit').textContent = 'Save changes';

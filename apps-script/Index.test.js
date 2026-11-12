@@ -124,6 +124,18 @@ test('admin lazy loading blocks edits until loaded and permits retry', async () 
   assert.equal(page.node('#adminLoadMessage').textContent, '');
 });
 
+test('editing an approver displays the separate notification address', () => {
+  const page = client();
+  page.node('#approverForm').scrollIntoView = () => {};
+  page.context.window.adminApprovers = [{
+    name: 'Alice', email: 'alice@x.edu', notificationEmail: 'alice@example.com', title: '', active: true,
+  }];
+  page.run("editApprover('alice@x.edu')");
+  assert.equal(page.node('#approverForm.email').value, 'alice@x.edu');
+  assert.equal(page.node('#approverForm.email').readOnly, true);
+  assert.equal(page.node('#approverForm.notificationEmail').value, 'alice@example.com');
+});
+
 test('brand logo is embedded locally with descriptive alternative text', () => {
   const brand = fs.readFileSync(`${__dirname}/Brand.html`, 'utf8');
   assert.match(html, /HtmlService.createHtmlOutputFromFile\('Brand'\)/);
